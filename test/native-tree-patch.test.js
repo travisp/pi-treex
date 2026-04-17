@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { TreeSelectorComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tree-selector.js";
+import { installTreeXNativePatches } from "../src/treex-component.js";
+
+const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
+
+function createTheme() {
+	return {
+		fg: (_name, text) => text,
+		bg: (_name, text) => text,
+		bold: (text) => text,
+		italic: (text) => text,
+	};
+}
+
+function createInteractiveModeClass() {
+	return class InteractiveMode {
+		constructor(rows = 24) {
+			this.ui = {
+				terminal: { rows },
+				setFocus: (focus) => {
+					this.focus = focus;
+				},
+				requestRender: () => {},
+			};
+			this.editor = { name: "editor" };
+			this.editorContainer = {
+				clear: () => {
+					this.cleared = true;
+				},
+				addChild: (child) => {
+					this.child = child;
+				},
+			};
+			this.sessionManager = {
+				getLeafId: () => "branch-5",
+			};
+		}
+
+		showSelector(create) {
+			const done = () => {
+				this.editorContainer.clear();
+				this.editorContainer.addChild(this.editor);
+				this.ui.setFocus(this.editor);
+			};
+
+			const { component, focus } = create(done);
+			this.editorContainer.clear();
+			this.editorContainer.addChild(component);
+			this.ui.setFocus(focus);
+			this.ui.requestRender();
+		}
+	};
+}
+
+function makeNode(id, parentId, text, children = []) {
+	return {
+		entry: {
+			id,
+			parentId,
+			timestamp: "2024-01-01T00:00:00.000Z",
+			type: "message",
+			message: {
+				role: "user",
+				content: text,
+			},
+		},
+		children,
+	};
+}
+
+function createTree() {
+	const branch8 = makeNode("branch-8", "branch-7", "branch message 8");
+	const branch7 = makeNode("branch-7", "branch-6", "branch message 7", [branch8]);
+	const branch6 = makeNode("branch-6", "branch-5", "branch message 6", [branch7]);
+	const branch5 = makeNode("branch-5", "branch-4", "selected branch message", [branch6]);
+	const branch4 = makeNode("branch-4", "branch-3", "branch message 4", [branch5]);
+	const branch3 = makeNode("branch-3", "branch-2", "branch message 3", [branch4]);
+	const branch2 = makeNode("branch-2", "branch-1", "branch message 2", [branch3]);
+	const branch1 = makeNode("branch-1", "branch", "branch message 1", [branch2]);
+	const branch = makeNode("branch", "root", "branch start", [branch1]);
+	const sibling = makeNode("sibling", "root", "sibling branch");
+	const root = makeNode("root", null, "root", [branch, sibling]);
+	return [root];
+}
+
+test("native tree patch wraps the real tree selector and renders without crashing", () => {
+	globalThis[THEME_KEY] = createTheme();
+
+	const InteractiveMode = createInteractiveModeClass();
+	installTreeXNativePatches(InteractiveMode);
+
+	const mode = new InteractiveMode(24);
+	const selector = new TreeSelectorComponent(
+		createTree(),
+		"branch-5",
+		24,
+		() => {},
+		() => {},
+		() => {},
+	);
+
+	mode.showSelector(() => ({ component: selector, focus: selector }));
+
+	const wrapper = mode.child;
+	assert.notEqual(wrapper, selector);
+	assert.equal(mode.focus, wrapper);
+
+	const lines = wrapper.render(80);
+
+	assert.ok(lines[6].includes("depth 3"));
+	assert.ok(lines.some((line) => line.includes("selected branch message")));
+	assert.ok(lines.some((line) => line.includes("CURRENT")));
+});

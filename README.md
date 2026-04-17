@@ -23,6 +23,14 @@ Or install as a pi package and then use:
 /tree
 ```
 
+## Development
+
+```bash
+npm run check   # lint + style check + tests
+npm run format  # format files
+npm test        # run the integration test
+```
+
 ## Notes
 
 - TreeX patches the native `/tree` path, so built-in slash command and tree hotkey keep using pi's own navigation and summary flow.

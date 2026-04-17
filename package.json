@@ -1,19 +1,25 @@
 {
-  "name": "pi-treex",
-  "version": "0.1.0",
-  "description": "Enhances pi's native /tree with sticky-left view and a detail pane",
-  "type": "module",
-  "main": "./index.js",
-  "keywords": [
-    "pi-package"
-  ],
-  "pi": {
-    "extensions": [
-      "./index.js"
-    ]
-  },
-  "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
-  }
+	"name": "pi-treex",
+	"version": "0.1.0",
+	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
+	"type": "module",
+	"main": "./index.js",
+	"keywords": ["pi-package"],
+	"pi": {
+		"extensions": ["./index.js"]
+	},
+	"scripts": {
+		"check": "biome check . && node --test",
+		"format": "biome format --write .",
+		"test": "node --test"
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4",
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-tui": "*"
+	}
 }
