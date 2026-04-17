@@ -1,0 +1,19 @@
+{
+  "name": "pi-treex",
+  "version": "0.1.0",
+  "description": "Enhanced /tree viewer for pi with rail and detail-pane modes",
+  "type": "module",
+  "main": "./index.js",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  }
+}
