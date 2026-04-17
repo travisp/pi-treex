@@ -1,7 +1,13 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import { TreeSelectorComponent as UpstreamTreeSelectorComponent } from "../vendor/pi/modes/interactive/components/tree-selector.js";
 
 const DETAIL_BODY_LINES = 3;
+const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
+const PATCH_STATE = Symbol.for("pi-treex:patch-state");
+const ANSI_PATTERN = /\x1B\[[0-9;]*m/g;
+
+function getTheme() {
+  return globalThis[THEME_KEY];
+}
 
 function normalizeDetail(text) {
   return String(text ?? "")
@@ -46,6 +52,10 @@ function fitLine(line, width) {
   return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
 }
 
+function isBlankLine(line) {
+  return String(line ?? "").replace(ANSI_PATTERN, "").trim().length === 0;
+}
+
 function getDisplayIndent(treeList, flatNode) {
   return treeList.multipleRoots ? Math.max(0, flatNode.indent - 1) : flatNode.indent;
 }
@@ -74,8 +84,6 @@ function getStickyLeftMetrics(treeList) {
   const { startIndex, endIndex } = getVisibleWindow(treeList);
   if (startIndex === endIndex) {
     return {
-      startIndex,
-      endIndex,
       stickyLeftShift: 0,
       stickyLeftDepth: null,
     };
@@ -89,8 +97,6 @@ function getStickyLeftMetrics(treeList) {
   const stickyLeftShift = Math.max(0, minVisibleDisplayIndent - 1);
 
   return {
-    startIndex,
-    endIndex,
     stickyLeftShift,
     stickyLeftDepth: stickyLeftShift > 0 ? minVisibleDisplayIndent + 1 : null,
   };
@@ -102,14 +108,15 @@ function shiftGutters(gutters, stickyLeftShift) {
   return gutters.map((gutter) => ({ ...gutter, position: gutter.position - stickyLeftShift })).filter((gutter) => gutter.position >= 0);
 }
 
-function patchNestedTreeListRender(treeList) {
+function patchTreeListRender(treeList) {
   if (treeList.__treexStickyLeftPatched) return;
 
   const originalRender = treeList.render.bind(treeList);
   treeList.__treexStickyLeftPatched = true;
 
   treeList.render = function renderStickyLeft(width) {
-    const { startIndex, endIndex, stickyLeftShift } = getStickyLeftMetrics(this);
+    const { startIndex, endIndex } = getVisibleWindow(this);
+    const { stickyLeftShift } = getStickyLeftMetrics(this);
     if (stickyLeftShift === 0) {
       return originalRender(width);
     }
@@ -294,134 +301,101 @@ function describeEntry(treeList, node) {
   }
 }
 
-export class TreeXComponent {
+function getTreeVisibleRows(tui) {
+  return Math.max(5, Math.floor(tui.terminal.rows / 2) - (DETAIL_BODY_LINES + 2));
+}
+
+function isNativeTreeSelector(component) {
+  return (
+    component?.constructor?.name === "TreeSelectorComponent" &&
+    typeof component.getTreeList === "function" &&
+    typeof component.render === "function" &&
+    typeof component.handleInput === "function"
+  );
+}
+
+function getTreeSelector(result) {
+  if (isNativeTreeSelector(result?.focus)) return result.focus;
+  if (isNativeTreeSelector(result?.component)) return result.component;
+  return null;
+}
+
+export class TreeXWrapper {
   constructor(options) {
+    this.selector = options.selector;
     this.tui = options.tui;
-    this.theme = options.theme;
-    this.done = options.done;
-    this.onLabelChange = options.onLabelChange ?? (() => {});
-    this.tree = options.tree;
     this.currentLeafId = options.currentLeafId;
-    this._focused = false;
-
-    this.nestedSelector = this.createNestedSelector(options.initialSelectedId, options.initialFilterMode);
+    patchTreeListRender(this.treeList);
   }
 
-  getNestedTerminalHeight() {
-    const detailPaneLines = DETAIL_BODY_LINES + 2;
-    const visibleRows = Math.max(5, Math.floor(this.tui.terminal.rows / 2) - detailPaneLines);
-    return visibleRows * 2;
+  get treeList() {
+    return this.selector.getTreeList();
   }
 
-  createNestedSelector(initialSelectedId, initialFilterMode) {
-    const selector = new UpstreamTreeSelectorComponent(
-      this.tree,
-      this.currentLeafId,
-      this.getNestedTerminalHeight(),
-      (entryId) => this.done({ type: "select", entryId }),
-      () => this.done(undefined),
-      (entryId, label) => this.applySharedLabelChange(entryId, label),
-      initialSelectedId,
-      initialFilterMode,
-    );
-
-    patchNestedTreeListRender(selector.getTreeList());
-    selector.focused = this._focused;
-    this.lastNestedTerminalHeight = this.getNestedTerminalHeight();
-    return selector;
-  }
-
-  getNestedTreeList() {
-    return this.nestedSelector.getTreeList();
-  }
-
-  captureViewState() {
-    const treeList = this.getNestedTreeList();
-    return {
-      selectedId: treeList.getSelectedNode()?.entry?.id,
-      filterMode: treeList.filterMode,
-      searchQuery: treeList.searchQuery,
-      showLabelTimestamps: treeList.showLabelTimestamps,
-    };
-  }
-
-  restoreViewState(viewState) {
-    const treeList = this.getNestedTreeList();
-    treeList.searchQuery = viewState.searchQuery;
-    treeList.showLabelTimestamps = viewState.showLabelTimestamps;
-    treeList.applyFilter();
-  }
-
-  ensureNestedSelector() {
-    if (this.lastNestedTerminalHeight === this.getNestedTerminalHeight()) {
-      return;
-    }
-
-    const viewState = this.captureViewState();
-    this.nestedSelector = this.createNestedSelector(viewState.selectedId, viewState.filterMode);
-    this.restoreViewState(viewState);
-  }
-
-  applySharedLabelChange(entryId, label) {
-    const treeList = this.getNestedTreeList();
-    treeList.applyFilter();
-    this.onLabelChange(entryId, label);
+  syncLayout() {
+    this.treeList.maxVisibleLines = getTreeVisibleRows(this.tui);
   }
 
   get focused() {
-    return this._focused;
+    return this.selector.focused;
   }
 
   set focused(value) {
-    this._focused = value;
-    this.nestedSelector.focused = value;
+    this.selector.focused = value;
   }
 
   invalidate() {
-    this.nestedSelector.invalidate();
+    this.selector.invalidate?.();
   }
 
   handleInput(keyData) {
-    this.ensureNestedSelector();
-    this.nestedSelector.handleInput(keyData);
+    this.syncLayout();
+    this.selector.handleInput(keyData);
     this.tui.requestRender();
   }
 
+  dispose() {
+    this.selector.dispose?.();
+  }
+
   getStickyLeftLine(width, stickyLeftDepth) {
-    if (!stickyLeftDepth) {
+    const theme = getTheme();
+    if (!stickyLeftDepth || !theme) {
       return fitLine("", width);
     }
 
-    const badge = this.theme.bg(
+    const badge = theme.bg(
       "selectedBg",
-      ` ${this.theme.bold(this.theme.fg("accent", "⇤"))} ${this.theme.bold(this.theme.fg("accent", `depth ${stickyLeftDepth}`))} `,
+      ` ${theme.bold(theme.fg("accent", "⇤"))} ${theme.bold(theme.fg("accent", `depth ${stickyLeftDepth}`))} `,
     );
 
     return fitLine(`  ${badge}`, width);
   }
 
   renderDetailPane(width) {
-    const treeList = this.getNestedTreeList();
-    const selected = treeList.filteredNodes[treeList.selectedIndex];
+    const theme = getTheme();
+    if (!theme) return [];
+
+    const selected = this.treeList.filteredNodes[this.treeList.selectedIndex];
 
     if (!selected) {
       return [
-        fitLine(this.theme.fg("muted", "NO SELECTION"), width),
+        fitLine(theme.fg("muted", "NO SELECTION"), width),
         ...Array.from({ length: DETAIL_BODY_LINES }, () => fitLine("", width)),
-        fitLine(this.theme.fg("border", "─".repeat(width)), width),
+        fitLine(theme.fg("border", "─".repeat(width)), width),
       ];
     }
 
-    const info = describeEntry(treeList, selected.node);
+    const info = describeEntry(this.treeList, selected.node);
     const metadataParts = [
-      this.theme.bold(this.theme.fg("accent", `DEPTH ${getDisplayDepth(treeList, selected)}`)),
-      this.theme.bold(info.kind),
-      this.theme.fg("muted", formatRelativeTime(selected.node.entry.timestamp)),
+      theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`)),
+      theme.bold(info.kind),
+      theme.fg("muted", formatRelativeTime(selected.node.entry.timestamp)),
     ];
 
-    if (info.toolName) metadataParts.push(this.theme.fg("muted", String(info.toolName).toUpperCase()));
-    if (selected.node.label) metadataParts.push(this.theme.fg("warning", `[${selected.node.label}]`));
-    if (selected.node.entry.id === this.currentLeafId) metadataParts.push(this.theme.fg("accent", "CURRENT"));
+    if (info.toolName) metadataParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
+    if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));
+    if (selected.node.entry.id === this.currentLeafId) metadataParts.push(theme.fg("accent", "CURRENT"));
 
     const fullText = normalizeDetail(info.full || "") || "(no text)";
     const wrappedLines = wrapTextWithAnsi(fullText, width);
@@ -429,7 +403,7 @@ export class TreeXComponent {
 
     if (wrappedLines.length > DETAIL_BODY_LINES && bodyLines.length > 0) {
       const lastLine = bodyLines.length - 1;
-      bodyLines[lastLine] = truncateToWidth(bodyLines[lastLine], Math.max(1, width - 1), "") + this.theme.fg("muted", "…");
+      bodyLines[lastLine] = truncateToWidth(bodyLines[lastLine], Math.max(1, width - 1), "") + theme.fg("muted", "…");
     }
 
     while (bodyLines.length < DETAIL_BODY_LINES) {
@@ -437,22 +411,56 @@ export class TreeXComponent {
     }
 
     return [
-      fitLine(metadataParts.join(this.theme.fg("muted", " · ")), width),
+      fitLine(metadataParts.join(theme.fg("muted", " · ")), width),
       ...bodyLines.map((line) => fitLine(line, width)),
-      fitLine(this.theme.fg("border", "─".repeat(width)), width),
+      fitLine(theme.fg("border", "─".repeat(width)), width),
     ];
   }
 
   render(width) {
     const safeWidth = Math.max(20, width);
 
-    this.ensureNestedSelector();
-    const treeList = this.getNestedTreeList();
-    const { stickyLeftDepth } = getStickyLeftMetrics(treeList);
-    const lines = [...this.nestedSelector.render(safeWidth)];
+    this.syncLayout();
+    const lines = [...this.selector.render(safeWidth)];
+    const { stickyLeftDepth } = getStickyLeftMetrics(this.treeList);
 
-    lines[6] = this.getStickyLeftLine(safeWidth, stickyLeftDepth);
+    if (stickyLeftDepth) {
+      const badgeIndex = lines.findIndex((line, index) => index >= 5 && isBlankLine(line));
+      const badgeLine = this.getStickyLeftLine(safeWidth, stickyLeftDepth);
+      if (badgeIndex >= 0) lines[badgeIndex] = badgeLine;
+      else lines.push(badgeLine);
+    }
 
     return [...lines, ...this.renderDetailPane(safeWidth)];
   }
+}
+
+export function installTreeXNativePatches(InteractiveMode) {
+  const proto = InteractiveMode?.prototype;
+  if (!proto || proto[PATCH_STATE]) return;
+
+  proto[PATCH_STATE] = {
+    originalShowSelector: proto.showSelector,
+  };
+
+  proto.showSelector = function treexShowSelector(create) {
+    return proto[PATCH_STATE].originalShowSelector.call(this, (done) => {
+      const result = create(done);
+      const selector = getTreeSelector(result);
+      if (!selector) {
+        return result;
+      }
+
+      const wrapper = new TreeXWrapper({
+        selector,
+        tui: this.ui,
+        currentLeafId: this.sessionManager.getLeafId(),
+      });
+
+      return {
+        component: wrapper,
+        focus: wrapper,
+      };
+    });
+  };
 }

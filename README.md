@@ -1,8 +1,8 @@
 # pi-treex
 
-TreeX is an enhanced session tree viewer for [pi](https://pi.dev).
+TreeX enhances pi's native session tree with sticky-left indentation and a bottom detail pane.
 
-It adds a `/treex` command with an improved view.
+It patches the built-in `/tree` view.
 
 ## Features
 
@@ -17,14 +17,13 @@ Load as a local extension while developing:
 pi -e /absolute/path/to/pi-treex
 ```
 
-Or install as a pi package and then run:
+Or install as a pi package and then use:
 
 ```text
-/treex
+/tree
 ```
 
 ## Notes
 
-- TreeX currently ships as `/treex` and does **not** override the built-in `/tree` keybinding.
-- Vendored upstream files live under `vendor/pi/`.
-- Selecting an entry uses pi's normal `navigateTree()` flow, including the optional branch summary prompt.
+- TreeX patches the native `/tree` path, so built-in slash command and tree hotkey keep using pi's own navigation and summary flow.
+- TreeX relies on private interactive-mode internals, so upstream pi changes may require TreeX updates.
