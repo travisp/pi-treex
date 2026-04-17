@@ -1,23 +1,8 @@
-import {
-  CURSOR_MARKER,
-  Input,
-  matchesKey,
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
-import { cycleViewMode, formatViewMode, getTreeStyleLabel } from "./config.js";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { TreeSelectorComponent as UpstreamTreeSelectorComponent } from "../vendor/pi/modes/interactive/components/tree-selector.js";
 import { keyText as upstreamKeyText } from "../vendor/pi/modes/interactive/components/keybinding-hints.js";
 
-const FILTER_MODES = ["default", "no-tools", "user-only", "labeled-only", "all"];
-
-function normalizePreview(text) {
-  return String(text ?? "")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+const DETAIL_BODY_LINES = 3;
 
 function normalizeDetail(text) {
   return String(text ?? "")
@@ -57,15 +42,9 @@ function formatRelativeTime(timestamp) {
   return `${diffYears} YR AGO`;
 }
 
-function formatKeys(keybindings, keybinding) {
-  const keys = keybindings.getKeys(keybinding);
-  return keys.length === 0 ? "" : keys.join("/");
-}
-
-function fitLine(line, width, theme, isSelected = false) {
+function fitLine(line, width) {
   const truncated = truncateToWidth(line, width);
-  const padded = truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
-  return isSelected ? theme.bg("selectedBg", padded) : padded;
+  return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
 }
 
 function updateTreeNodeLabel(tree, entryId, label, labelTimestamp = new Date().toISOString()) {
@@ -86,7 +65,7 @@ function getNestedDisplayIndent(treeList, flatNode) {
 }
 
 function getNestedVisibleWindow(treeList) {
-  if (!treeList || treeList.filteredNodes.length === 0) {
+  if (treeList.filteredNodes.length === 0) {
     return { startIndex: 0, endIndex: 0 };
   }
 
@@ -94,18 +73,21 @@ function getNestedVisibleWindow(treeList) {
     0,
     Math.min(treeList.selectedIndex - Math.floor(treeList.maxVisibleLines / 2), treeList.filteredNodes.length - treeList.maxVisibleLines),
   );
-  const endIndex = Math.min(startIndex + treeList.maxVisibleLines, treeList.filteredNodes.length);
-  return { startIndex, endIndex };
+
+  return {
+    startIndex,
+    endIndex: Math.min(startIndex + treeList.maxVisibleLines, treeList.filteredNodes.length),
+  };
 }
 
 function getNestedStickyLeftMetrics(treeList) {
   const { startIndex, endIndex } = getNestedVisibleWindow(treeList);
-  if (!treeList || startIndex === endIndex) {
+  if (startIndex === endIndex) {
     return {
       startIndex,
       endIndex,
       stickyLeftShift: 0,
-      shallowestVisibleDepth: 1,
+      stickyLeftDepth: null,
     };
   }
 
@@ -114,42 +96,37 @@ function getNestedStickyLeftMetrics(treeList) {
     minVisibleDisplayIndent = Math.min(minVisibleDisplayIndent, getNestedDisplayIndent(treeList, treeList.filteredNodes[index]));
   }
 
-  if (!Number.isFinite(minVisibleDisplayIndent)) minVisibleDisplayIndent = 0;
+  const stickyLeftShift = Math.max(0, minVisibleDisplayIndent - 1);
 
   return {
     startIndex,
     endIndex,
-    stickyLeftShift: Math.max(0, minVisibleDisplayIndent - 1),
-    shallowestVisibleDepth: minVisibleDisplayIndent + 1,
+    stickyLeftShift,
+    stickyLeftDepth: stickyLeftShift > 0 ? minVisibleDisplayIndent + 1 : null,
   };
 }
 
 function shiftNestedGutters(gutters, stickyLeftShift) {
-  if (stickyLeftShift <= 0) return gutters ?? [];
+  if (stickyLeftShift === 0) return gutters;
 
-  return (gutters ?? [])
-    .map((gutter) => ({ ...gutter, position: gutter.position - stickyLeftShift }))
-    .filter((gutter) => gutter.position >= 0);
+  return gutters.map((gutter) => ({ ...gutter, position: gutter.position - stickyLeftShift })).filter((gutter) => gutter.position >= 0);
 }
 
 function patchNestedTreeListRender(treeList, theme) {
-  if (!treeList || treeList.__treexStickyLeftPatched) return;
+  if (treeList.__treexStickyLeftPatched) return;
 
   treeList.__treexStickyLeftPatched = true;
-  treeList.__treexStickyLeftMetrics = { stickyLeftShift: 0, shallowestVisibleDepth: 1 };
 
   treeList.render = function renderStickyLeft(width) {
     const lines = [];
 
     if (this.filteredNodes.length === 0) {
-      this.__treexStickyLeftMetrics = { stickyLeftShift: 0, shallowestVisibleDepth: 1 };
       lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
       lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.getStatusLabels()}`), width));
       return lines;
     }
 
-    const { startIndex, endIndex, stickyLeftShift, shallowestVisibleDepth } = getNestedStickyLeftMetrics(this);
-    this.__treexStickyLeftMetrics = { stickyLeftShift, shallowestVisibleDepth };
+    const { startIndex, endIndex, stickyLeftShift } = getNestedStickyLeftMetrics(this);
 
     for (let index = startIndex; index < endIndex; index++) {
       const flatNode = this.filteredNodes[index];
@@ -205,28 +182,19 @@ function patchNestedTreeListRender(treeList, theme) {
 }
 
 class TreeState {
-  constructor(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode = "default") {
+  constructor(tree, currentLeafId, initialSelectedId, initialFilterMode = "default") {
     this.flatNodes = [];
     this.filteredNodes = [];
     this.selectedIndex = 0;
     this.currentLeafId = currentLeafId;
-    this.maxVisibleLines = maxVisibleLines;
     this.filterMode = initialFilterMode;
     this.searchQuery = "";
     this.toolCallMap = new Map();
     this.multipleRoots = tree.length > 1;
-    this.showLabelTimestamps = false;
-    this.activePathIds = new Set();
-    this.visibleParentMap = new Map();
-    this.visibleChildrenMap = new Map();
     this.lastSelectedId = null;
     this.foldedNodes = new Set();
-    this.onSelect = undefined;
-    this.onCancel = undefined;
-    this.onLabelEdit = undefined;
 
     this.flatNodes = this.flattenTree(tree);
-    this.buildActivePath();
     this.applyFilter();
 
     const targetId = initialSelectedId ?? currentLeafId;
@@ -234,33 +202,9 @@ class TreeState {
     this.lastSelectedId = this.filteredNodes[this.selectedIndex]?.node.entry.id ?? null;
   }
 
-  setMaxVisibleLines(value) {
-    this.maxVisibleLines = Math.max(5, value);
-  }
-
-  getSelectedFlatNode() {
-    return this.filteredNodes[this.selectedIndex];
-  }
-
-  getSelectedNode() {
-    return this.getSelectedFlatNode()?.node;
-  }
-
-  getSelectedEntryId() {
-    return this.getSelectedFlatNode()?.node.entry.id;
-  }
-
-  getSearchQuery() {
-    return this.searchQuery;
-  }
-
   getDisplayDepth(flatNode) {
     const displayIndent = this.multipleRoots ? Math.max(0, flatNode.indent - 1) : flatNode.indent;
     return displayIndent + 1;
-  }
-
-  getMaxDepthDigits() {
-    return Math.max(1, ...this.flatNodes.map((node) => String(this.getDisplayDepth(node)).length));
   }
 
   findNearestVisibleIndex(entryId) {
@@ -285,117 +229,83 @@ class TreeState {
     return this.filteredNodes.length - 1;
   }
 
-  buildActivePath() {
-    this.activePathIds.clear();
-    if (!this.currentLeafId) return;
-
-    const entryMap = new Map();
-    for (const flatNode of this.flatNodes) {
-      entryMap.set(flatNode.node.entry.id, flatNode);
-    }
-
-    let currentId = this.currentLeafId;
-    while (currentId) {
-      this.activePathIds.add(currentId);
-      const node = entryMap.get(currentId);
-      if (!node) break;
-      currentId = node.node.entry.parentId ?? null;
-    }
-  }
-
   flattenTree(roots) {
-    const result = [];
+    const flatNodes = [];
     this.toolCallMap.clear();
+    this.multipleRoots = roots.length > 1;
 
-    const containsActive = new Map();
-    const leafId = this.currentLeafId;
+    const containsCurrentLeaf = new Map();
     const allNodes = [];
-    const preOrderStack = [...roots];
+    const pending = [...roots];
 
-    while (preOrderStack.length > 0) {
-      const node = preOrderStack.pop();
+    while (pending.length > 0) {
+      const node = pending.pop();
       allNodes.push(node);
       for (let index = node.children.length - 1; index >= 0; index--) {
-        preOrderStack.push(node.children[index]);
+        pending.push(node.children[index]);
       }
     }
 
     for (let index = allNodes.length - 1; index >= 0; index--) {
       const node = allNodes[index];
-      let hasActive = leafId !== null && node.entry.id === leafId;
+      let hasCurrentLeaf = node.entry.id === this.currentLeafId;
       for (const child of node.children) {
-        if (containsActive.get(child)) hasActive = true;
+        if (containsCurrentLeaf.get(child)) hasCurrentLeaf = true;
       }
-      containsActive.set(node, hasActive);
+      containsCurrentLeaf.set(node, hasCurrentLeaf);
     }
 
     const stack = [];
-    const multipleRoots = roots.length > 1;
-    const orderedRoots = [...roots].sort((a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)));
+    const sortedRoots = [...roots].sort((a, b) => Number(containsCurrentLeaf.get(b)) - Number(containsCurrentLeaf.get(a)));
 
-    for (let index = orderedRoots.length - 1; index >= 0; index--) {
-      const isLast = index === orderedRoots.length - 1;
-      stack.push([
-        orderedRoots[index],
-        1,
-        multipleRoots ? 1 : 0,
-        multipleRoots,
-        multipleRoots,
-        isLast,
-        [],
-        multipleRoots,
-      ]);
+    for (let index = sortedRoots.length - 1; index >= 0; index--) {
+      stack.push({
+        node: sortedRoots[index],
+        indent: this.multipleRoots ? 1 : 0,
+        justBranched: this.multipleRoots,
+        showConnector: this.multipleRoots,
+        isLast: index === sortedRoots.length - 1,
+        gutters: [],
+        isVirtualRootChild: this.multipleRoots,
+      });
     }
 
     while (stack.length > 0) {
-      const [node, depth, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] = stack.pop();
+      const { node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild } = stack.pop();
       const entry = node.entry;
 
-      if (entry.type === "message" && entry.message.role === "assistant") {
-        const content = entry.message.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block && typeof block === "object" && block.type === "toolCall") {
-              this.toolCallMap.set(block.id, { name: block.name, arguments: block.arguments });
-            }
+      if (entry.type === "message" && entry.message.role === "assistant" && Array.isArray(entry.message.content)) {
+        for (const block of entry.message.content) {
+          if (block && typeof block === "object" && block.type === "toolCall") {
+            this.toolCallMap.set(block.id, { name: block.name, arguments: block.arguments });
           }
         }
       }
 
-      result.push({ node, depth, indent, showConnector, isLast, gutters, isVirtualRootChild });
+      flatNodes.push({ node, indent, showConnector, isLast, gutters, isVirtualRootChild });
 
-      const children = node.children;
-      const multipleChildren = children.length > 1;
-      const orderedChildren = [...children].sort((a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)));
-
-      let childIndent;
-      if (multipleChildren) childIndent = indent + 1;
-      else if (justBranched && indent > 0) childIndent = indent + 1;
-      else childIndent = indent;
-
-      const connectorDisplayed = showConnector && !isVirtualRootChild;
+      const children = [...node.children].sort((a, b) => Number(containsCurrentLeaf.get(b)) - Number(containsCurrentLeaf.get(a)));
+      const childCount = children.length;
+      const childIndent = childCount > 1 || (justBranched && indent > 0) ? indent + 1 : indent;
       const currentDisplayIndent = this.multipleRoots ? Math.max(0, indent - 1) : indent;
-      const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-      const childGutters = connectorDisplayed
-        ? [...gutters, { position: connectorPosition, show: !isLast }]
+      const childGutters = showConnector && !isVirtualRootChild
+        ? [...gutters, { position: Math.max(0, currentDisplayIndent - 1), show: !isLast }]
         : gutters;
 
-      for (let index = orderedChildren.length - 1; index >= 0; index--) {
-        const childIsLast = index === orderedChildren.length - 1;
-        stack.push([
-          orderedChildren[index],
-          depth + 1,
-          childIndent,
-          multipleChildren,
-          multipleChildren,
-          childIsLast,
-          childGutters,
-          false,
-        ]);
+      for (let index = childCount - 1; index >= 0; index--) {
+        stack.push({
+          node: children[index],
+          indent: childIndent,
+          justBranched: childCount > 1,
+          showConnector: childCount > 1,
+          isLast: index === childCount - 1,
+          gutters: childGutters,
+          isVirtualRootChild: false,
+        });
       }
     }
 
-    return result;
+    return flatNodes;
   }
 
   applyFilter() {
@@ -477,60 +387,58 @@ class TreeState {
   }
 
   recalculateVisualStructure() {
-    if (this.filteredNodes.length === 0) return;
-
-    const visibleIds = new Set(this.filteredNodes.map((node) => node.node.entry.id));
-    const entryMap = new Map();
-    for (const flatNode of this.flatNodes) {
-      entryMap.set(flatNode.node.entry.id, flatNode);
+    if (this.filteredNodes.length === 0) {
+      this.multipleRoots = false;
+      return;
     }
 
-    const findVisibleAncestor = (nodeId) => {
-      let currentId = entryMap.get(nodeId)?.node.entry.parentId ?? null;
+    const visibleIds = new Set(this.filteredNodes.map((node) => node.node.entry.id));
+    const parentById = new Map();
+    for (const flatNode of this.flatNodes) {
+      parentById.set(flatNode.node.entry.id, flatNode.node.entry.parentId ?? null);
+    }
+
+    const getVisibleParentId = (nodeId) => {
+      let currentId = parentById.get(nodeId) ?? null;
       while (currentId !== null) {
         if (visibleIds.has(currentId)) return currentId;
-        currentId = entryMap.get(currentId)?.node.entry.parentId ?? null;
+        currentId = parentById.get(currentId) ?? null;
       }
       return null;
     };
 
-    const visibleParent = new Map();
-    const visibleChildren = new Map();
-    visibleChildren.set(null, []);
-
+    const childrenByParentId = new Map([[null, []]]);
     for (const flatNode of this.filteredNodes) {
       const nodeId = flatNode.node.entry.id;
-      const ancestorId = findVisibleAncestor(nodeId);
-      visibleParent.set(nodeId, ancestorId);
-      if (!visibleChildren.has(ancestorId)) visibleChildren.set(ancestorId, []);
-      visibleChildren.get(ancestorId).push(nodeId);
+      const parentId = getVisibleParentId(nodeId);
+      if (!childrenByParentId.has(parentId)) childrenByParentId.set(parentId, []);
+      childrenByParentId.get(parentId).push(nodeId);
     }
 
-    const visibleRootIds = visibleChildren.get(null) ?? [];
-    this.multipleRoots = visibleRootIds.length > 1;
+    const rootIds = childrenByParentId.get(null);
+    this.multipleRoots = rootIds.length > 1;
 
-    const filteredNodeMap = new Map();
+    const flatNodesById = new Map();
     for (const flatNode of this.filteredNodes) {
-      filteredNodeMap.set(flatNode.node.entry.id, flatNode);
+      flatNodesById.set(flatNode.node.entry.id, flatNode);
     }
 
     const stack = [];
-    for (let index = visibleRootIds.length - 1; index >= 0; index--) {
-      const isLast = index === visibleRootIds.length - 1;
-      stack.push([
-        visibleRootIds[index],
-        this.multipleRoots ? 1 : 0,
-        this.multipleRoots,
-        this.multipleRoots,
-        isLast,
-        [],
-        this.multipleRoots,
-      ]);
+    for (let index = rootIds.length - 1; index >= 0; index--) {
+      stack.push({
+        nodeId: rootIds[index],
+        indent: this.multipleRoots ? 1 : 0,
+        justBranched: this.multipleRoots,
+        showConnector: this.multipleRoots,
+        isLast: index === rootIds.length - 1,
+        gutters: [],
+        isVirtualRootChild: this.multipleRoots,
+      });
     }
 
     while (stack.length > 0) {
-      const [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] = stack.pop();
-      const flatNode = filteredNodeMap.get(nodeId);
+      const { nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild } = stack.pop();
+      const flatNode = flatNodesById.get(nodeId);
       if (!flatNode) continue;
 
       flatNode.indent = indent;
@@ -539,29 +447,26 @@ class TreeState {
       flatNode.gutters = gutters;
       flatNode.isVirtualRootChild = isVirtualRootChild;
 
-      const children = visibleChildren.get(nodeId) || [];
-      const multipleChildren = children.length > 1;
-
-      let childIndent;
-      if (multipleChildren) childIndent = indent + 1;
-      else if (justBranched && indent > 0) childIndent = indent + 1;
-      else childIndent = indent;
-
-      const connectorDisplayed = showConnector && !isVirtualRootChild;
+      const childIds = childrenByParentId.get(nodeId) ?? [];
+      const childCount = childIds.length;
+      const childIndent = childCount > 1 || (justBranched && indent > 0) ? indent + 1 : indent;
       const currentDisplayIndent = this.multipleRoots ? Math.max(0, indent - 1) : indent;
-      const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-      const childGutters = connectorDisplayed
-        ? [...gutters, { position: connectorPosition, show: !isLast }]
+      const childGutters = showConnector && !isVirtualRootChild
+        ? [...gutters, { position: Math.max(0, currentDisplayIndent - 1), show: !isLast }]
         : gutters;
 
-      for (let index = children.length - 1; index >= 0; index--) {
-        const childIsLast = index === children.length - 1;
-        stack.push([children[index], childIndent, multipleChildren, multipleChildren, childIsLast, childGutters, false]);
+      for (let index = childCount - 1; index >= 0; index--) {
+        stack.push({
+          nodeId: childIds[index],
+          indent: childIndent,
+          justBranched: childCount > 1,
+          showConnector: childCount > 1,
+          isLast: index === childCount - 1,
+          gutters: childGutters,
+          isVirtualRootChild: false,
+        });
       }
     }
-
-    this.visibleParentMap = visibleParent;
-    this.visibleChildrenMap = visibleChildren;
   }
 
   getSearchableText(node) {
@@ -573,14 +478,14 @@ class TreeState {
     switch (entry.type) {
       case "message": {
         parts.push(entry.message.role);
-        parts.push(this.extractContent(entry.message.content, { preview: false, includeToolCalls: true }));
+        parts.push(this.extractContent(entry.message.content, { includeToolCalls: true }));
         if (entry.message.role === "bashExecution" && entry.message.command) parts.push(entry.message.command);
         if (entry.message.errorMessage) parts.push(entry.message.errorMessage);
         break;
       }
       case "custom_message":
         parts.push(entry.customType);
-        parts.push(this.extractContent(entry.content, { preview: false, includeToolCalls: true }));
+        parts.push(this.extractContent(entry.content, { includeToolCalls: true }));
         break;
       case "compaction":
         parts.push("compaction", entry.summary ?? "");
@@ -621,177 +526,28 @@ class TreeState {
     this.applyFilter();
   }
 
-  getStatusLabels() {
-    let labels = "";
-    switch (this.filterMode) {
-      case "no-tools":
-        labels += " [no-tools]";
-        break;
-      case "user-only":
-        labels += " [user]";
-        break;
-      case "labeled-only":
-        labels += " [labeled]";
-        break;
-      case "all":
-        labels += " [all]";
-        break;
-      default:
-        break;
-    }
-
-    if (this.showLabelTimestamps) labels += " [+label time]";
-    return labels;
-  }
-
-  renderRows(width, treeStyle, theme) {
-    const lines = [];
-
-    if (this.filteredNodes.length === 0) {
-      lines.push(fitLine(theme.fg("muted", "No entries found"), width, theme));
-      lines.push(fitLine(theme.fg("muted", `(0/0)${this.getStatusLabels()}`), width, theme));
-      return lines;
-    }
-
-    const visibleWindow = Math.max(1, this.maxVisibleLines - 1);
-    const startIndex = Math.max(
-      0,
-      Math.min(
-        this.selectedIndex - Math.floor(visibleWindow / 2),
-        Math.max(0, this.filteredNodes.length - visibleWindow),
-      ),
-    );
-    const endIndex = Math.min(startIndex + visibleWindow, this.filteredNodes.length);
-
-    for (let index = startIndex; index < endIndex; index++) {
-      const flatNode = this.filteredNodes[index];
-      lines.push(this.renderRow(flatNode, index === this.selectedIndex, width, treeStyle, theme));
-    }
-
-    lines.push(
-      fitLine(
-        theme.fg("muted", `(${this.selectedIndex + 1}/${this.filteredNodes.length})${this.getStatusLabels()}`),
-        width,
-        theme,
-      ),
-    );
-
-    return lines;
-  }
-
-  renderRow(flatNode, isSelected, width, treeStyle, theme) {
-    const info = this.describeEntry(flatNode.node, theme, isSelected);
-    const isCurrentLeaf = flatNode.node.entry.id === this.currentLeafId;
-    const isOnActivePath = this.activePathIds.has(flatNode.node.entry.id);
-    const label = flatNode.node.label ? theme.fg("warning", `[${flatNode.node.label}] `) : "";
-    const labelTimestamp =
-      this.showLabelTimestamps && flatNode.node.label && flatNode.node.labelTimestamp
-        ? theme.fg("muted", `${this.formatLabelTimestamp(flatNode.node.labelTimestamp)} `)
-        : "";
-    const activeBadge = isCurrentLeaf ? theme.fg("accent", " ← active") : "";
-
-    let line;
-    if (treeStyle === "rail") {
-      const depthDigits = this.getMaxDepthDigits();
-      const gutterText = String(this.getDisplayDepth(flatNode)).padStart(depthDigits, " ");
-      const gutter = isSelected ? theme.fg("accent", gutterText) : theme.fg("muted", gutterText);
-      const indicatorChar = this.foldedNodes.has(flatNode.node.entry.id) ? "▸" : isOnActivePath ? "•" : " ";
-      const indicator = indicatorChar === " " ? "  " : `${theme.fg("accent", indicatorChar)} `;
-      line = `${gutter} ${indicator}${label}${labelTimestamp}${info.preview}${activeBadge}`;
-    } else {
-      const displayIndent = this.multipleRoots ? Math.max(0, flatNode.indent - 1) : flatNode.indent;
-      const connector = flatNode.showConnector && !flatNode.isVirtualRootChild ? (flatNode.isLast ? "└─ " : "├─ ") : "";
-      const connectorPosition = connector ? displayIndent - 1 : -1;
-      const totalChars = displayIndent * 3;
-      const prefixChars = [];
-      const isFolded = this.foldedNodes.has(flatNode.node.entry.id);
-
-      for (let index = 0; index < totalChars; index++) {
-        const level = Math.floor(index / 3);
-        const posInLevel = index % 3;
-        const gutter = flatNode.gutters.find((gutterInfo) => gutterInfo.position === level);
-
-        if (gutter) {
-          if (posInLevel === 0) prefixChars.push(gutter.show ? "│" : " ");
-          else prefixChars.push(" ");
-        } else if (connector && level === connectorPosition) {
-          if (posInLevel === 0) prefixChars.push(flatNode.isLast ? "└" : "├");
-          else if (posInLevel === 1) {
-            const foldable = this.isFoldable(flatNode.node.entry.id);
-            prefixChars.push(isFolded ? "⊞" : foldable ? "⊟" : "─");
-          } else prefixChars.push(" ");
-        } else {
-          prefixChars.push(" ");
-        }
-      }
-
-      const prefix = prefixChars.join("");
-      const showsFoldInConnector = flatNode.showConnector && !flatNode.isVirtualRootChild;
-      const foldMarker = isFolded && !showsFoldInConnector ? theme.fg("accent", "⊞ ") : "";
-      const pathMarker = isOnActivePath ? theme.fg("accent", "• ") : "";
-      line = `${theme.fg("dim", prefix)}${foldMarker}${pathMarker}${label}${labelTimestamp}${info.preview}${activeBadge}`;
-    }
-
-    return fitLine(line, width, theme, isSelected);
-  }
-
-  describeEntry(node, theme, isSelected = false) {
+  describeEntry(node) {
     const entry = node.entry;
-    const emphasize = (text) => (isSelected ? theme.bold(text) : text);
 
     switch (entry.type) {
       case "message": {
         const message = entry.message;
 
         if (message.role === "user") {
-          const full = this.extractContent(message.content, { preview: false, includeToolCalls: true }) || "(empty)";
-          const previewText = normalizePreview(full) || "(empty)";
           return {
             kind: "USER",
-            preview: emphasize(`${theme.fg("accent", "user: ")}${previewText}`),
-            full,
+            full: this.extractContent(message.content, { includeToolCalls: true }) || "(empty)",
             toolName: undefined,
           };
         }
 
         if (message.role === "assistant") {
-          const full =
-            this.extractContent(message.content, { preview: false, includeToolCalls: true, verboseToolCalls: true }) ||
-            message.errorMessage ||
-            (message.stopReason === "aborted" ? "(aborted)" : "(no content)");
-          const previewText = this.extractContent(message.content, { preview: true, includeToolCalls: false });
-
-          if (previewText) {
-            return {
-              kind: "ASSISTANT",
-              preview: emphasize(`${theme.fg("success", "assistant: ")}${previewText}`),
-              full,
-              toolName: undefined,
-            };
-          }
-
-          if (message.stopReason === "aborted") {
-            return {
-              kind: "ASSISTANT",
-              preview: emphasize(`${theme.fg("success", "assistant: ")}${theme.fg("muted", "(aborted)")}`),
-              full,
-              toolName: undefined,
-            };
-          }
-
-          if (message.errorMessage) {
-            return {
-              kind: "ASSISTANT",
-              preview: emphasize(`${theme.fg("success", "assistant: ")}${theme.fg("error", normalizePreview(message.errorMessage).slice(0, 120))}`),
-              full,
-              toolName: undefined,
-            };
-          }
-
           return {
             kind: "ASSISTANT",
-            preview: emphasize(`${theme.fg("success", "assistant: ")}${theme.fg("muted", "(tool calls)")}`),
-            full,
+            full:
+              this.extractContent(message.content, { includeToolCalls: true, verboseToolCalls: true }) ||
+              message.errorMessage ||
+              (message.stopReason === "aborted" ? "(aborted)" : "(no content)"),
             toolName: undefined,
           };
         }
@@ -799,58 +555,42 @@ class TreeState {
         if (message.role === "toolResult") {
           const toolCall = message.toolCallId ? this.toolCallMap.get(message.toolCallId) : undefined;
           const toolName = message.toolName ?? toolCall?.name;
-          const full =
-            this.extractContent(message.content, { preview: false, includeToolCalls: true, verboseToolCalls: true }) ||
-            (toolCall ? this.formatToolCallVerbose(toolCall.name, toolCall.arguments) : `[${toolName ?? "tool"}]`);
-
-          let preview;
-          if (toolCall) preview = theme.fg("muted", this.formatToolCall(toolCall.name, toolCall.arguments));
-          else if (toolName) preview = theme.fg("muted", `[${toolName}]`);
-          else preview = theme.fg("muted", `[tool result]`);
-
           return {
             kind: "TOOL RESULT",
-            preview: emphasize(preview),
-            full,
+            full:
+              this.extractContent(message.content, { includeToolCalls: true, verboseToolCalls: true }) ||
+              (toolCall ? this.formatToolCallVerbose(toolCall.name, toolCall.arguments) : `[${toolName ?? "tool"}]`),
             toolName,
           };
         }
 
         if (message.role === "bashExecution") {
-          const full = normalizeDetail(message.command ?? "") || "(empty)";
           return {
             kind: "BASH",
-            preview: emphasize(theme.fg("dim", `[bash]: ${normalizePreview(full)}`)),
-            full,
+            full: normalizeDetail(message.command ?? "") || "(empty)",
             toolName: "bash",
           };
         }
 
         return {
           kind: String(message.role ?? "MESSAGE").toUpperCase(),
-          preview: emphasize(theme.fg("dim", `[${message.role ?? "message"}]`)),
           full: `[${message.role ?? "message"}]`,
           toolName: undefined,
         };
       }
 
-      case "custom_message": {
-        const full = this.extractContent(entry.content, { preview: false, includeToolCalls: true }) || "(empty)";
-        const previewText = normalizePreview(full) || "(empty)";
+      case "custom_message":
         return {
           kind: entry.customType ? `${entry.customType}`.toUpperCase() : "CUSTOM MESSAGE",
-          preview: emphasize(`${theme.fg("customMessageLabel", `[${entry.customType}]: `)}${previewText}`),
-          full,
+          full: this.extractContent(entry.content, { includeToolCalls: true }) || "(empty)",
           toolName: undefined,
         };
-      }
 
       case "compaction": {
         const tokenCount = Math.round((entry.tokensBefore ?? 0) / 1000);
         const label = `[compaction: ${tokenCount}k tokens]`;
         return {
           kind: "COMPACTION",
-          preview: emphasize(theme.fg("warning", label)),
           full: normalizeDetail(entry.summary ?? label) || label,
           toolName: undefined,
         };
@@ -859,7 +599,6 @@ class TreeState {
       case "branch_summary":
         return {
           kind: "BRANCH SUMMARY",
-          preview: emphasize(`${theme.fg("warning", "[branch summary]: ")}${normalizePreview(entry.summary ?? "")}`),
           full: normalizeDetail(entry.summary ?? "") || "(empty)",
           toolName: undefined,
         };
@@ -867,7 +606,6 @@ class TreeState {
       case "model_change":
         return {
           kind: "MODEL",
-          preview: emphasize(theme.fg("dim", `[model: ${entry.modelId}]`)),
           full: `[model: ${entry.modelId}]`,
           toolName: undefined,
         };
@@ -875,25 +613,20 @@ class TreeState {
       case "thinking_level_change":
         return {
           kind: "THINKING",
-          preview: emphasize(theme.fg("dim", `[thinking: ${entry.thinkingLevel}]`)),
           full: `[thinking: ${entry.thinkingLevel}]`,
           toolName: undefined,
         };
 
-      case "custom": {
-        const full = entry.data === undefined ? `[custom: ${entry.customType}]` : safeJson(entry.data, 2);
+      case "custom":
         return {
           kind: entry.customType ? `${entry.customType}`.toUpperCase() : "CUSTOM",
-          preview: emphasize(theme.fg("dim", `[custom: ${entry.customType}]`)),
-          full,
+          full: entry.data === undefined ? `[custom: ${entry.customType}]` : safeJson(entry.data, 2),
           toolName: undefined,
         };
-      }
 
       case "label":
         return {
           kind: "LABEL",
-          preview: emphasize(theme.fg("dim", `[label: ${entry.label ?? "(cleared)"}]`)),
           full: entry.label ?? "(cleared)",
           toolName: undefined,
         };
@@ -901,11 +634,6 @@ class TreeState {
       case "session_info":
         return {
           kind: "SESSION TITLE",
-          preview: emphasize(
-            entry.name
-              ? `${theme.fg("dim", "[title: ")}${theme.fg("dim", entry.name)}${theme.fg("dim", "]")}`
-              : `${theme.fg("dim", "[title: ")}${theme.italic(theme.fg("dim", "empty"))}${theme.fg("dim", "]")}`,
-          ),
           full: entry.name ?? "(empty)",
           toolName: undefined,
         };
@@ -913,7 +641,6 @@ class TreeState {
       default:
         return {
           kind: "ENTRY",
-          preview: emphasize(theme.fg("dim", "[entry]")),
           full: "[entry]",
           toolName: undefined,
         };
@@ -921,10 +648,10 @@ class TreeState {
   }
 
   extractContent(content, options = {}) {
-    const { preview = false, includeToolCalls = false, verboseToolCalls = false } = options;
+    const { includeToolCalls = false, verboseToolCalls = false } = options;
 
     if (typeof content === "string") {
-      return preview ? normalizePreview(content) : normalizeDetail(content);
+      return normalizeDetail(content);
     }
 
     if (!Array.isArray(content)) return "";
@@ -934,7 +661,7 @@ class TreeState {
       if (!block || typeof block !== "object") continue;
 
       if (block.type === "text") {
-        parts.push(preview ? normalizePreview(block.text) : normalizeDetail(block.text));
+        parts.push(normalizeDetail(block.text));
       } else if (block.type === "toolCall" && includeToolCalls) {
         parts.push(
           verboseToolCalls
@@ -946,7 +673,7 @@ class TreeState {
       }
     }
 
-    return parts.filter(Boolean).join(preview ? " " : "\n\n");
+    return parts.filter(Boolean).join("\n\n");
   }
 
   hasTextContent(content) {
@@ -1010,222 +737,26 @@ class TreeState {
     return json ? `${name}\n${json}` : name;
   }
 
-  formatLabelTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const hours = date.getHours().toString().padStart(2, "0");
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    const time = `${hours}:${minutes}`;
-
-    if (
-      date.getFullYear() === now.getFullYear() &&
-      date.getMonth() === now.getMonth() &&
-      date.getDate() === now.getDate()
-    ) {
-      return time;
-    }
-
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    if (date.getFullYear() === now.getFullYear()) {
-      return `${month}/${day} ${time}`;
-    }
-
-    const year = date.getFullYear().toString().slice(-2);
-    return `${year}/${month}/${day} ${time}`;
-  }
-
-  handleInput(keyData, keybindings) {
-    if (keybindings.matches(keyData, "tui.select.up")) {
-      this.selectedIndex = this.selectedIndex === 0 ? this.filteredNodes.length - 1 : this.selectedIndex - 1;
-    } else if (keybindings.matches(keyData, "tui.select.down")) {
-      this.selectedIndex = this.selectedIndex === this.filteredNodes.length - 1 ? 0 : this.selectedIndex + 1;
-    } else if (keybindings.matches(keyData, "app.tree.foldOrUp")) {
-      const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
-      if (currentId && this.isFoldable(currentId) && !this.foldedNodes.has(currentId)) {
-        this.foldedNodes.add(currentId);
-        this.applyFilter();
-      } else {
-        this.selectedIndex = this.findBranchSegmentStart("up");
-      }
-    } else if (keybindings.matches(keyData, "app.tree.unfoldOrDown")) {
-      const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
-      if (currentId && this.foldedNodes.has(currentId)) {
-        this.foldedNodes.delete(currentId);
-        this.applyFilter();
-      } else {
-        this.selectedIndex = this.findBranchSegmentStart("down");
-      }
-    } else if (keybindings.matches(keyData, "tui.editor.cursorLeft") || keybindings.matches(keyData, "tui.select.pageUp")) {
-      this.selectedIndex = Math.max(0, this.selectedIndex - Math.max(1, this.maxVisibleLines - 1));
-    } else if (keybindings.matches(keyData, "tui.editor.cursorRight") || keybindings.matches(keyData, "tui.select.pageDown")) {
-      this.selectedIndex = Math.min(this.filteredNodes.length - 1, this.selectedIndex + Math.max(1, this.maxVisibleLines - 1));
-    } else if (keybindings.matches(keyData, "tui.select.confirm")) {
-      const selected = this.filteredNodes[this.selectedIndex];
-      if (selected && this.onSelect) this.onSelect(selected.node.entry.id);
-    } else if (keybindings.matches(keyData, "tui.select.cancel")) {
-      if (this.searchQuery) {
-        this.searchQuery = "";
-        this.foldedNodes.clear();
-        this.applyFilter();
-      } else if (this.onCancel) {
-        this.onCancel();
-      }
-    } else if (matchesKey(keyData, "ctrl+d")) {
-      this.filterMode = "default";
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "ctrl+t")) {
-      this.filterMode = this.filterMode === "no-tools" ? "default" : "no-tools";
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "ctrl+u")) {
-      this.filterMode = this.filterMode === "user-only" ? "default" : "user-only";
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "ctrl+l")) {
-      this.filterMode = this.filterMode === "labeled-only" ? "default" : "labeled-only";
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "ctrl+a")) {
-      this.filterMode = this.filterMode === "all" ? "default" : "all";
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "shift+ctrl+o")) {
-      const currentIndex = FILTER_MODES.indexOf(this.filterMode);
-      this.filterMode = FILTER_MODES[(currentIndex - 1 + FILTER_MODES.length) % FILTER_MODES.length];
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (matchesKey(keyData, "ctrl+o")) {
-      const currentIndex = FILTER_MODES.indexOf(this.filterMode);
-      this.filterMode = FILTER_MODES[(currentIndex + 1) % FILTER_MODES.length];
-      this.foldedNodes.clear();
-      this.applyFilter();
-    } else if (keybindings.matches(keyData, "tui.editor.deleteCharBackward")) {
-      if (this.searchQuery.length > 0) {
-        this.searchQuery = this.searchQuery.slice(0, -1);
-        this.foldedNodes.clear();
-        this.applyFilter();
-      }
-    } else if (keybindings.matches(keyData, "app.tree.editLabel")) {
-      const selected = this.filteredNodes[this.selectedIndex];
-      if (selected && this.onLabelEdit) this.onLabelEdit(selected.node.entry.id, selected.node.label);
-    } else if (keybindings.matches(keyData, "app.tree.toggleLabelTimestamp")) {
-      this.showLabelTimestamps = !this.showLabelTimestamps;
-    } else {
-      const hasControlChars = [...keyData].some((character) => {
-        const code = character.charCodeAt(0);
-        return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-      });
-
-      if (!hasControlChars && keyData.length > 0) {
-        this.searchQuery += keyData;
-        this.foldedNodes.clear();
-        this.applyFilter();
-      }
-    }
-
-    if (this.filteredNodes.length > 0) {
-      this.lastSelectedId = this.filteredNodes[this.selectedIndex]?.node.entry.id ?? this.lastSelectedId;
-    }
-  }
-
-  isFoldable(entryId) {
-    const children = this.visibleChildrenMap.get(entryId);
-    if (!children || children.length === 0) return false;
-    const parentId = this.visibleParentMap.get(entryId);
-    if (parentId === null || parentId === undefined) return true;
-    const siblings = this.visibleChildrenMap.get(parentId);
-    return siblings !== undefined && siblings.length > 1;
-  }
-
-  findBranchSegmentStart(direction) {
-    const selectedId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
-    if (!selectedId) return this.selectedIndex;
-
-    const indexByEntryId = new Map(this.filteredNodes.map((node, index) => [node.node.entry.id, index]));
-    let currentId = selectedId;
-
-    if (direction === "down") {
-      while (true) {
-        const children = this.visibleChildrenMap.get(currentId) ?? [];
-        if (children.length === 0) return indexByEntryId.get(currentId) ?? this.selectedIndex;
-        if (children.length > 1) return indexByEntryId.get(children[0]) ?? this.selectedIndex;
-        currentId = children[0];
-      }
-    }
-
-    while (true) {
-      const parentId = this.visibleParentMap.get(currentId) ?? null;
-      if (parentId === null) return indexByEntryId.get(currentId) ?? this.selectedIndex;
-      const children = this.visibleChildrenMap.get(parentId) ?? [];
-      if (children.length > 1) {
-        const segmentStart = indexByEntryId.get(currentId);
-        if (segmentStart < this.selectedIndex) return segmentStart;
-      }
-      currentId = parentId;
-    }
-  }
 }
 
 export class TreeXComponent {
   constructor(options) {
     this.tui = options.tui;
     this.theme = options.theme;
-    this.keybindings = options.keybindings;
-    this.config = { ...options.config };
     this.done = options.done;
-    this.onLabelChange = options.onLabelChange;
-    this.onConfigChange = options.onConfigChange;
+    this.onLabelChange = options.onLabelChange ?? (() => {});
     this.tree = options.tree;
     this.currentLeafId = options.currentLeafId;
-    this.labelInput = null;
-    this.labelEntryId = undefined;
     this._focused = false;
-    this.nestedSelector = null;
-    this.lastNestedTerminalHeight = null;
 
-    this.treeState = this.createRailState(options.initialSelectedId, options.initialFilterMode);
-    if (this.config.treeStyle === "nested") {
-      this.nestedSelector = this.createNestedSelector(options.initialSelectedId, options.initialFilterMode);
-    }
-  }
-
-  createRailState(initialSelectedId, initialFilterMode) {
-    const state = new TreeState(
-      this.tree,
-      this.currentLeafId,
-      Math.max(5, Math.floor(this.tui.terminal.rows / 2)),
-      initialSelectedId,
-      initialFilterMode,
-    );
-
-    state.onSelect = (entryId) => this.done({ type: "select", entryId });
-    state.onCancel = () => this.done(undefined);
-    state.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
-    return state;
-  }
-
-  getDetailBodyLineCount() {
-    return Math.max(1, this.config.detailPaneHeight - 1);
-  }
-
-  getDetailPaneLineCount(treeStyle = this.config.treeStyle) {
-    const contentLines = this.getDetailBodyLineCount();
-    return treeStyle === "nested" ? 2 + contentLines : 3 + contentLines;
-  }
-
-  getBaseVisibleRows() {
-    return Math.max(5, Math.floor(this.tui.terminal.rows / 2));
-  }
-
-  getTargetComponentHeight() {
-    return this.getBaseVisibleRows() + 9;
+    this.treeState = new TreeState(this.tree, this.currentLeafId, options.initialSelectedId, options.initialFilterMode);
+    this.nestedSelector = this.createNestedSelector(options.initialSelectedId, options.initialFilterMode);
   }
 
   getNestedTerminalHeight() {
-    const desiredVisibleRows = Math.max(5, this.getBaseVisibleRows() - this.getDetailPaneLineCount("nested"));
-    return desiredVisibleRows * 2;
+    const detailPaneLines = DETAIL_BODY_LINES + 2;
+    const visibleRows = Math.max(5, Math.floor(this.tui.terminal.rows / 2) - detailPaneLines);
+    return visibleRows * 2;
   }
 
   createNestedSelector(initialSelectedId, initialFilterMode) {
@@ -1240,89 +771,49 @@ export class TreeXComponent {
       initialFilterMode,
     );
 
-    patchNestedTreeListRender(selector.getTreeList?.(), this.theme);
+    patchNestedTreeListRender(selector.getTreeList(), this.theme);
     selector.focused = this._focused;
     this.lastNestedTerminalHeight = this.getNestedTerminalHeight();
     return selector;
   }
 
   getNestedTreeList() {
-    return this.nestedSelector?.getTreeList?.();
+    return this.nestedSelector.getTreeList();
   }
 
   captureViewState() {
-    if (this.config.treeStyle === "nested" && this.nestedSelector) {
-      const treeList = this.getNestedTreeList();
-      return {
-        selectedId: treeList?.getSelectedNode?.()?.entry?.id,
-        filterMode: treeList?.filterMode ?? "default",
-        searchQuery: treeList?.searchQuery ?? "",
-        showLabelTimestamps: Boolean(treeList?.showLabelTimestamps),
-      };
-    }
-
+    const treeList = this.getNestedTreeList();
     return {
-      selectedId: this.treeState.getSelectedNode()?.entry?.id,
-      filterMode: this.treeState.filterMode,
-      searchQuery: this.treeState.searchQuery,
-      showLabelTimestamps: Boolean(this.treeState.showLabelTimestamps),
+      selectedId: treeList.getSelectedNode()?.entry?.id,
+      filterMode: treeList.filterMode,
+      searchQuery: treeList.searchQuery,
+      showLabelTimestamps: treeList.showLabelTimestamps,
     };
   }
 
-  applyViewStateToRail(viewState) {
-    if (typeof viewState.searchQuery === "string") {
-      this.treeState.searchQuery = viewState.searchQuery;
-    }
-    this.treeState.showLabelTimestamps = Boolean(viewState.showLabelTimestamps);
-    this.treeState.applyFilter();
-  }
-
-  applyViewStateToNested(viewState) {
+  restoreViewState(viewState) {
     const treeList = this.getNestedTreeList();
-    if (!treeList) return;
-
-    treeList.searchQuery = typeof viewState.searchQuery === "string" ? viewState.searchQuery : "";
-    treeList.showLabelTimestamps = Boolean(viewState.showLabelTimestamps);
+    treeList.searchQuery = viewState.searchQuery;
+    treeList.showLabelTimestamps = viewState.showLabelTimestamps;
     treeList.applyFilter();
   }
 
   ensureNestedSelector() {
-    const desiredTerminalHeight = this.getNestedTerminalHeight();
-    if (!this.nestedSelector) {
-      const viewState = this.captureViewState();
-      this.nestedSelector = this.createNestedSelector(viewState.selectedId, viewState.filterMode);
-      this.applyViewStateToNested(viewState);
+    if (this.lastNestedTerminalHeight === this.getNestedTerminalHeight()) {
       return;
     }
 
-    if (this.lastNestedTerminalHeight !== desiredTerminalHeight) {
-      const viewState = this.captureViewState();
-      this.nestedSelector = this.createNestedSelector(viewState.selectedId, viewState.filterMode);
-      this.applyViewStateToNested(viewState);
-    }
-  }
-
-  switchViewMode() {
     const viewState = this.captureViewState();
-    this.config = cycleViewMode(this.config);
-
-    if (this.config.treeStyle === "nested") {
-      this.nestedSelector = this.createNestedSelector(viewState.selectedId, viewState.filterMode);
-      this.applyViewStateToNested(viewState);
-    } else {
-      this.treeState = this.createRailState(viewState.selectedId, viewState.filterMode);
-      this.applyViewStateToRail(viewState);
-    }
-
-    this.onConfigChange?.(this.config);
+    this.nestedSelector = this.createNestedSelector(viewState.selectedId, viewState.filterMode);
+    this.restoreViewState(viewState);
   }
 
   applySharedLabelChange(entryId, label) {
     const labelTimestamp = label ? new Date().toISOString() : undefined;
     updateTreeNodeLabel(this.tree, entryId, label, labelTimestamp);
     this.treeState.updateNodeLabel(entryId, label, labelTimestamp);
-    this.getNestedTreeList()?.updateNodeLabel?.(entryId, label, labelTimestamp);
-    this.onLabelChange?.(entryId, label);
+    this.getNestedTreeList().updateNodeLabel(entryId, label, labelTimestamp);
+    this.onLabelChange(entryId, label);
   }
 
   get focused() {
@@ -1331,87 +822,37 @@ export class TreeXComponent {
 
   set focused(value) {
     this._focused = value;
-    if (this.labelInput) this.labelInput.focused = value;
-    if (this.nestedSelector) this.nestedSelector.focused = value;
+    this.nestedSelector.focused = value;
   }
 
   invalidate() {
-    this.labelInput?.invalidate?.();
-    this.nestedSelector?.invalidate?.();
-  }
-
-  requestRender() {
-    this.tui.requestRender();
-  }
-
-  showLabelInput(entryId, currentLabel) {
-    this.labelEntryId = entryId;
-    this.labelInput = new Input();
-    this.labelInput.focused = this._focused;
-    if (currentLabel) this.labelInput.setValue(currentLabel);
-  }
-
-  hideLabelInput() {
-    this.labelEntryId = undefined;
-    this.labelInput = null;
+    this.nestedSelector.invalidate();
   }
 
   handleInput(keyData) {
-    if (this.config.treeStyle !== "nested" && this.labelInput) {
-      if (this.keybindings.matches(keyData, "tui.select.confirm")) {
-        const value = this.labelInput.getValue().trim();
-        if (this.labelEntryId) {
-          this.applySharedLabelChange(this.labelEntryId, value || undefined);
-        }
-        this.hideLabelInput();
-      } else if (this.keybindings.matches(keyData, "tui.select.cancel")) {
-        this.hideLabelInput();
-      } else {
-        this.labelInput.handleInput(keyData);
-      }
-
-      this.requestRender();
-      return;
-    }
-
-    if (matchesKey(keyData, "ctrl+v")) {
-      this.switchViewMode();
-      this.requestRender();
-      return;
-    }
-
-    if (this.config.treeStyle === "nested") {
-      this.ensureNestedSelector();
-      this.nestedSelector.handleInput(keyData);
-    } else {
-      this.treeState.handleInput(keyData, this.keybindings);
-    }
-
-    this.requestRender();
+    this.ensureNestedSelector();
+    this.nestedSelector.handleInput(keyData);
+    this.tui.requestRender();
   }
 
   getTitle(width) {
-    const title = `${this.theme.bold(this.theme.fg("accent", "TreeX"))}${this.theme.fg("muted", ` · ${formatViewMode(this.config)}`)}`;
-    return fitLine(title, width, this.theme);
+    return fitLine(this.theme.bold(this.theme.fg("accent", "TreeX")), width);
   }
 
   getHelpLine(width) {
-    const nextView = getTreeStyleLabel(this.config.treeStyle === "nested" ? "rail" : "nested");
-    const originalHelp = `  ↑/↓: move. ←/→: page. ^←/^→ or Alt+←/Alt+→: fold/branch. ${upstreamKeyText("app.tree.editLabel")}: label. ^D/^T/^U/^L/^A: filters (^O/⇧^O cycle). ${upstreamKeyText("app.tree.toggleLabelTimestamp")}: label time`;
-    const appendedHelp = `${originalHelp}. ^V: ${nextView} view`;
-    return fitLine(this.theme.fg("muted", appendedHelp), width, this.theme);
+    const help = `  ↑/↓: move. ←/→: page. ^←/^→ or Alt+←/Alt+→: fold/branch. ${upstreamKeyText("app.tree.editLabel")}: label. ^D/^T/^U/^L/^A: filters (^O/⇧^O cycle). ${upstreamKeyText("app.tree.toggleLabelTimestamp")}: label time`;
+    return fitLine(this.theme.fg("muted", help), width);
   }
 
-  getSearchLine(width, options = {}) {
-    const query = options.query ?? this.treeState.getSearchQuery();
+  getSearchLine(width, query = "") {
     const prefix = this.theme.fg("muted", "Type to search:");
     const suffix = query ? ` ${this.theme.fg("accent", query)}` : "";
-    return fitLine(`${prefix}${suffix}`, width, this.theme);
+    return fitLine(`${prefix}${suffix}`, width);
   }
 
-  getNestedStickyLeftLine(width, stickyLeftDepth = null) {
-    if (!(stickyLeftDepth && stickyLeftDepth > 1)) {
-      return fitLine("", width, this.theme);
+  getStickyLeftLine(width, stickyLeftDepth) {
+    if (!stickyLeftDepth) {
+      return fitLine("", width);
     }
 
     const badge = this.theme.bg(
@@ -1419,47 +860,25 @@ export class TreeXComponent {
       ` ${this.theme.bold(this.theme.fg("accent", "⇤"))} ${this.theme.bold(this.theme.fg("accent", `depth ${stickyLeftDepth}`))} `,
     );
 
-    return fitLine(`  ${badge}`, width, this.theme);
+    return fitLine(`  ${badge}`, width);
   }
 
-  computeTreeHeight() {
-    const labelRows = this.config.treeStyle === "nested" ? 0 : this.labelInput ? 4 : 0;
-    const detailRows = this.getDetailPaneLineCount("rail");
-    const staticRows = 4;
-    const targetComponentHeight = this.getTargetComponentHeight();
-    return Math.max(5, targetComponentHeight - staticRows - detailRows - labelRows);
-  }
-
-  getSelectedFlatNode() {
-    if (this.config.treeStyle === "nested") {
-      const selectedNode = this.getNestedTreeList()?.getSelectedNode?.();
-      if (!selectedNode) return undefined;
-      return this.treeState.flatNodes.find((flatNode) => flatNode.node.entry.id === selectedNode.entry.id);
-    }
-
-    return this.treeState.getSelectedFlatNode();
-  }
-
-  renderDetailPane(width, options = {}) {
-    const { includeTopBorder = this.config.treeStyle !== "nested" } = options;
-    const selected = this.getSelectedFlatNode();
-    const maxBodyLines = this.getDetailBodyLineCount();
+  renderDetailPane(width) {
+    const selectedNodeId = this.getNestedTreeList().getSelectedNode()?.entry?.id;
+    const selected = this.treeState.flatNodes.find((flatNode) => flatNode.node.entry.id === selectedNodeId);
+    const maxBodyLines = DETAIL_BODY_LINES;
 
     if (!selected) {
-      const lines = [];
-      if (includeTopBorder) lines.push(fitLine(this.theme.fg("border", "─".repeat(width)), width, this.theme));
-      lines.push(fitLine(this.theme.fg("muted", "NO SELECTION"), width, this.theme));
-      for (let index = 0; index < maxBodyLines; index++) {
-        lines.push(fitLine("", width, this.theme));
-      }
-      lines.push(fitLine(this.theme.fg("border", "─".repeat(width)), width, this.theme));
-      return lines;
+      return [
+        fitLine(this.theme.fg("muted", "NO SELECTION"), width),
+        ...Array.from({ length: maxBodyLines }, () => fitLine("", width)),
+        fitLine(this.theme.fg("border", "─".repeat(width)), width),
+      ];
     }
 
-    const info = this.treeState.describeEntry(selected.node, this.theme, false);
+    const info = this.treeState.describeEntry(selected.node);
     const metadataParts = [
       this.theme.bold(this.theme.fg("accent", `DEPTH ${this.treeState.getDisplayDepth(selected)}`)),
-      this.theme.bold(this.theme.fg("accent", `VIEW ${getTreeStyleLabel(this.config.treeStyle).toUpperCase()}`)),
       this.theme.bold(info.kind),
       this.theme.fg("muted", formatRelativeTime(selected.node.entry.timestamp)),
     ];
@@ -1469,100 +888,38 @@ export class TreeXComponent {
     if (selected.node.entry.id === this.currentLeafId) metadataParts.push(this.theme.fg("accent", "CURRENT"));
 
     const fullText = normalizeDetail(info.full || "") || "(no text)";
-    const wrapped = wrapTextWithAnsi(fullText, width);
-    const bodyLines = wrapped.slice(0, maxBodyLines);
+    const wrappedLines = wrapTextWithAnsi(fullText, width);
+    const bodyLines = wrappedLines.slice(0, maxBodyLines);
 
-    if (wrapped.length > maxBodyLines && bodyLines.length > 0) {
-      const lastIndex = bodyLines.length - 1;
-      bodyLines[lastIndex] = truncateToWidth(bodyLines[lastIndex], Math.max(1, width - 1), "") + this.theme.fg("muted", "…");
+    if (wrappedLines.length > maxBodyLines && bodyLines.length > 0) {
+      const lastLine = bodyLines.length - 1;
+      bodyLines[lastLine] = truncateToWidth(bodyLines[lastLine], Math.max(1, width - 1), "") + this.theme.fg("muted", "…");
     }
 
     while (bodyLines.length < maxBodyLines) {
       bodyLines.push("");
     }
 
-    const lines = [];
-    if (includeTopBorder) lines.push(fitLine(this.theme.fg("border", "─".repeat(width)), width, this.theme));
-    lines.push(fitLine(metadataParts.join(this.theme.fg("muted", " · ")), width, this.theme));
-
-    for (const line of bodyLines) {
-      lines.push(fitLine(line, width, this.theme));
-    }
-
-    lines.push(fitLine(this.theme.fg("border", "─".repeat(width)), width, this.theme));
-    return lines;
-  }
-
-  renderLabelEditor(width) {
-    if (!this.labelInput) return [];
-
-    const lines = [];
-
-    const prompt = fitLine(this.theme.fg("muted", "Label (empty to remove):"), width, this.theme);
-    const inputLines = this.labelInput.render(width).map((line) => fitLine(line, width, this.theme));
-    const hint = fitLine(
-      this.theme.fg(
-        "muted",
-        `${formatKeys(this.keybindings, "tui.select.confirm")} save · ${formatKeys(this.keybindings, "tui.select.cancel")} cancel`,
-      ),
-      width,
-      this.theme,
-    );
-
-    lines.push(prompt, ...inputLines, hint);
-    return lines;
+    return [
+      fitLine(metadataParts.join(this.theme.fg("muted", " · ")), width),
+      ...bodyLines.map((line) => fitLine(line, width)),
+      fitLine(this.theme.fg("border", "─".repeat(width)), width),
+    ];
   }
 
   render(width) {
     const safeWidth = Math.max(20, width);
 
-    if (this.config.treeStyle === "nested") {
-      this.ensureNestedSelector();
-      const nestedTreeList = this.getNestedTreeList();
-      const stickyLeftMetrics = getNestedStickyLeftMetrics(nestedTreeList);
-      const nestedLines = [...this.nestedSelector.render(safeWidth)];
-      if (nestedLines.length > 2) {
-        nestedLines[2] = fitLine(
-          `${this.theme.bold(this.theme.fg("accent", "TreeX"))}${this.theme.fg("muted", ` · ${getTreeStyleLabel("nested")}`)}`,
-          safeWidth,
-          this.theme,
-        );
-      }
-      if (nestedLines.length > 3) {
-        nestedLines[3] = this.getHelpLine(safeWidth);
-      }
-      if (nestedLines.length > 4) {
-        nestedLines[4] = this.getSearchLine(safeWidth, {
-          query: nestedTreeList?.getSearchQuery?.() ?? "",
-        });
-      }
-      if (nestedLines.length > 6) {
-        nestedLines[6] = this.getNestedStickyLeftLine(
-          safeWidth,
-          stickyLeftMetrics.stickyLeftShift > 0 ? stickyLeftMetrics.shallowestVisibleDepth : null,
-        );
-      }
-      return [...nestedLines, ...this.renderDetailPane(safeWidth, { includeTopBorder: false })];
-    }
+    this.ensureNestedSelector();
+    const treeList = this.getNestedTreeList();
+    const { stickyLeftDepth } = getNestedStickyLeftMetrics(treeList);
+    const lines = [...this.nestedSelector.render(safeWidth)];
 
-    this.treeState.setMaxVisibleLines(this.computeTreeHeight());
+    lines[2] = this.getTitle(safeWidth);
+    lines[3] = this.getHelpLine(safeWidth);
+    lines[4] = this.getSearchLine(safeWidth, treeList.getSearchQuery());
+    lines[6] = this.getStickyLeftLine(safeWidth, stickyLeftDepth);
 
-    return [
-      this.getTitle(safeWidth),
-      this.getHelpLine(safeWidth),
-      this.getSearchLine(safeWidth),
-      fitLine(this.theme.fg("border", "─".repeat(safeWidth)), safeWidth, this.theme),
-      ...this.treeState.renderRows(safeWidth, "rail", this.theme),
-      ...this.renderDetailPane(safeWidth),
-      ...this.renderLabelEditor(safeWidth),
-    ];
+    return [...lines, ...this.renderDetailPane(safeWidth)];
   }
-}
-
-export function getSelectedNodeText(component) {
-  if (!component) return undefined;
-  if (component.config?.treeStyle === "nested") {
-    return component.getNestedTreeList?.()?.getSelectedNode?.();
-  }
-  return component?.treeState?.getSelectedNode?.();
 }

@@ -2,22 +2,12 @@
 
 TreeX is an enhanced session tree viewer for [pi](https://pi.dev).
 
-It adds a `/treex` command with 2 view styles:
-
-- original
-- rail
-
-The detail pane is always visible.
+It adds a `/treex` command with an improved view.
 
 ## Features
 
-- fixed-width rail gutter mode for deep trees
-- bottom detail pane with full content for the selected row
-- original mode uses a vendored copy of pi's upstream tree component internally
-- original view auto-shifts left when deep branches fill the viewport, reclaiming horizontal space for content
-- same tree navigation/filter/search keys as built-in `/tree`
-- label editing from the tree
-- per-user view mode persistence in `~/.pi/agent/treex.json`
+- sticky-left view that auto-shifts deep branches left to reclaim horizontal space
+- bottom detail pane with more details for the selected row
 
 ## Usage
 
@@ -32,20 +22,6 @@ Or install as a pi package and then run:
 ```text
 /treex
 ```
-
-## Keys inside TreeX
-
-- `↑/↓`: move
-- `←/→` or `PageUp/PageDown`: page
-- `Ctrl+←/Ctrl+→` or `Alt+←/Alt+→`: fold / branch segment nav
-- `Shift+L`: edit label
-- `Shift+T`: toggle label timestamps
-- `Ctrl+D/Ctrl+T/Ctrl+U/Ctrl+L/Ctrl+A`: filters
-- `Ctrl+O` / `Shift+Ctrl+O`: cycle filters
-- `Ctrl+V`: toggle original / rail
-- `Type to search`
-- `Enter`: navigate
-- `Esc`: close (or clear search first)
 
 ## Notes
 

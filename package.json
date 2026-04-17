@@ -1,7 +1,7 @@
 {
   "name": "pi-treex",
   "version": "0.1.0",
-  "description": "Enhanced /tree viewer for pi with rail and detail-pane modes",
+  "description": "Enhanced /tree viewer for pi with sticky-left view, detail pane, and other enhancements",
   "type": "module",
   "main": "./index.js",
   "keywords": [

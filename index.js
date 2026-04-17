@@ -1,4 +1,3 @@
-import { loadTreeXConfig, saveTreeXConfig } from "./src/config.js";
 import { TreeXComponent } from "./src/treex-component.js";
 
 async function promptForNavigationOptions(ctx) {
@@ -9,17 +8,23 @@ async function promptForNavigationOptions(ctx) {
       "Summarize with custom prompt",
     ]);
 
-    if (choice === undefined) return { type: "back" };
-    if (choice === "No summary") return { summarize: false };
-    if (choice === "Summarize") return { summarize: true };
+    switch (choice) {
+      case undefined:
+        return { type: "back" };
+      case "No summary":
+        return { summarize: false };
+      case "Summarize":
+        return { summarize: true };
+      default: {
+        const customInstructions = await ctx.ui.editor("Custom summarization instructions", "");
+        if (customInstructions === undefined) continue;
 
-    const customInstructions = await ctx.ui.editor("Custom summarization instructions", "");
-    if (customInstructions === undefined) continue;
-
-    return {
-      summarize: true,
-      customInstructions: customInstructions.trim() || undefined,
-    };
+        return {
+          summarize: true,
+          customInstructions: customInstructions.trim() || undefined,
+        };
+      }
+    }
   }
 }
 
@@ -35,21 +40,15 @@ async function openTreeX(pi, ctx) {
       return;
     }
 
-    const config = await loadTreeXConfig();
-    const result = await ctx.ui.custom((tui, theme, keybindings, done) => {
+    const result = await ctx.ui.custom((tui, theme, _keybindings, done) => {
       return new TreeXComponent({
         tui,
         theme,
-        keybindings,
         tree,
         currentLeafId,
-        config,
         initialSelectedId,
         done,
         onLabelChange: (entryId, label) => pi.setLabel(entryId, label),
-        onConfigChange: (nextConfig) => {
-          void saveTreeXConfig(nextConfig);
-        },
       });
     });
 
@@ -78,9 +77,7 @@ async function openTreeX(pi, ctx) {
 
 export default function treeXExtension(pi) {
   pi.registerCommand("treex", {
-    description: "Enhanced session tree viewer with original and rail modes",
-    handler: async (_args, ctx) => {
-      await openTreeX(pi, ctx);
-    },
+    description: "Enhanced session tree viewer with sticky-left original view and detail pane",
+    handler: (_args, ctx) => openTreeX(pi, ctx),
   });
 }
