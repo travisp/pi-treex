@@ -14,6 +14,7 @@ The detail pane is always visible.
 - fixed-width rail gutter mode for deep trees
 - bottom detail pane with full content for the selected row
 - original mode uses a vendored copy of pi's upstream tree component internally
+- original view auto-shifts left when deep branches fill the viewport, reclaiming horizontal space for content
 - same tree navigation/filter/search keys as built-in `/tree`
 - label editing from the tree
 - per-user view mode persistence in `~/.pi/agent/treex.json`

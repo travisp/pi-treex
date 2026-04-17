@@ -81,6 +81,129 @@ function updateTreeNodeLabel(tree, entryId, label, labelTimestamp = new Date().t
   }
 }
 
+function getNestedDisplayIndent(treeList, flatNode) {
+  return treeList.multipleRoots ? Math.max(0, flatNode.indent - 1) : flatNode.indent;
+}
+
+function getNestedVisibleWindow(treeList) {
+  if (!treeList || treeList.filteredNodes.length === 0) {
+    return { startIndex: 0, endIndex: 0 };
+  }
+
+  const startIndex = Math.max(
+    0,
+    Math.min(treeList.selectedIndex - Math.floor(treeList.maxVisibleLines / 2), treeList.filteredNodes.length - treeList.maxVisibleLines),
+  );
+  const endIndex = Math.min(startIndex + treeList.maxVisibleLines, treeList.filteredNodes.length);
+  return { startIndex, endIndex };
+}
+
+function getNestedStickyLeftMetrics(treeList) {
+  const { startIndex, endIndex } = getNestedVisibleWindow(treeList);
+  if (!treeList || startIndex === endIndex) {
+    return {
+      startIndex,
+      endIndex,
+      stickyLeftShift: 0,
+      shallowestVisibleDepth: 1,
+    };
+  }
+
+  let minVisibleDisplayIndent = Infinity;
+  for (let index = startIndex; index < endIndex; index++) {
+    minVisibleDisplayIndent = Math.min(minVisibleDisplayIndent, getNestedDisplayIndent(treeList, treeList.filteredNodes[index]));
+  }
+
+  if (!Number.isFinite(minVisibleDisplayIndent)) minVisibleDisplayIndent = 0;
+
+  return {
+    startIndex,
+    endIndex,
+    stickyLeftShift: Math.max(0, minVisibleDisplayIndent - 1),
+    shallowestVisibleDepth: minVisibleDisplayIndent + 1,
+  };
+}
+
+function shiftNestedGutters(gutters, stickyLeftShift) {
+  if (stickyLeftShift <= 0) return gutters ?? [];
+
+  return (gutters ?? [])
+    .map((gutter) => ({ ...gutter, position: gutter.position - stickyLeftShift }))
+    .filter((gutter) => gutter.position >= 0);
+}
+
+function patchNestedTreeListRender(treeList, theme) {
+  if (!treeList || treeList.__treexStickyLeftPatched) return;
+
+  treeList.__treexStickyLeftPatched = true;
+  treeList.__treexStickyLeftMetrics = { stickyLeftShift: 0, shallowestVisibleDepth: 1 };
+
+  treeList.render = function renderStickyLeft(width) {
+    const lines = [];
+
+    if (this.filteredNodes.length === 0) {
+      this.__treexStickyLeftMetrics = { stickyLeftShift: 0, shallowestVisibleDepth: 1 };
+      lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
+      lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.getStatusLabels()}`), width));
+      return lines;
+    }
+
+    const { startIndex, endIndex, stickyLeftShift, shallowestVisibleDepth } = getNestedStickyLeftMetrics(this);
+    this.__treexStickyLeftMetrics = { stickyLeftShift, shallowestVisibleDepth };
+
+    for (let index = startIndex; index < endIndex; index++) {
+      const flatNode = this.filteredNodes[index];
+      const entry = flatNode.node.entry;
+      const isSelected = index === this.selectedIndex;
+      const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
+      const displayIndent = Math.max(0, getNestedDisplayIndent(this, flatNode) - stickyLeftShift);
+      const shiftedGutters = shiftNestedGutters(flatNode.gutters, stickyLeftShift);
+      const connector = flatNode.showConnector && !flatNode.isVirtualRootChild ? (flatNode.isLast ? "└─ " : "├─ ") : "";
+      const connectorPosition = connector ? displayIndent - 1 : -1;
+      const totalChars = displayIndent * 3;
+      const prefixChars = [];
+      const isFolded = this.foldedNodes.has(entry.id);
+
+      for (let prefixIndex = 0; prefixIndex < totalChars; prefixIndex++) {
+        const level = Math.floor(prefixIndex / 3);
+        const posInLevel = prefixIndex % 3;
+        const gutter = shiftedGutters.find((gutterInfo) => gutterInfo.position === level);
+
+        if (gutter) {
+          if (posInLevel === 0) prefixChars.push(gutter.show ? "│" : " ");
+          else prefixChars.push(" ");
+        } else if (connector && level === connectorPosition) {
+          if (posInLevel === 0) prefixChars.push(flatNode.isLast ? "└" : "├");
+          else if (posInLevel === 1) {
+            const foldable = this.isFoldable(entry.id);
+            prefixChars.push(isFolded ? "⊞" : foldable ? "⊟" : "─");
+          } else prefixChars.push(" ");
+        } else {
+          prefixChars.push(" ");
+        }
+      }
+
+      const prefix = prefixChars.join("");
+      const showsFoldInConnector = flatNode.showConnector && !flatNode.isVirtualRootChild;
+      const foldMarker = isFolded && !showsFoldInConnector ? theme.fg("accent", "⊞ ") : "";
+      const pathMarker = this.activePathIds.has(entry.id) ? theme.fg("accent", "• ") : "";
+      const label = flatNode.node.label ? theme.fg("warning", `[${flatNode.node.label}] `) : "";
+      const labelTimestamp =
+        this.showLabelTimestamps && flatNode.node.label && flatNode.node.labelTimestamp
+          ? theme.fg("muted", `${this.formatLabelTimestamp(flatNode.node.labelTimestamp)} `)
+          : "";
+      const content = this.getEntryDisplayText(flatNode.node, isSelected);
+
+      let line = cursor + theme.fg("dim", prefix) + foldMarker + pathMarker + label + labelTimestamp + content;
+      if (isSelected) line = theme.bg("selectedBg", line);
+      lines.push(truncateToWidth(line, width));
+    }
+
+    lines.push(truncateToWidth(theme.fg("muted", `  (${this.selectedIndex + 1}/${this.filteredNodes.length})${this.getStatusLabels()}`), width));
+    return lines;
+  };
+}
+
 class TreeState {
   constructor(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode = "default") {
     this.flatNodes = [];
@@ -1117,6 +1240,7 @@ export class TreeXComponent {
       initialFilterMode,
     );
 
+    patchNestedTreeListRender(selector.getTreeList?.(), this.theme);
     selector.focused = this._focused;
     this.lastNestedTerminalHeight = this.getNestedTerminalHeight();
     return selector;
@@ -1278,11 +1402,24 @@ export class TreeXComponent {
     return fitLine(this.theme.fg("muted", appendedHelp), width, this.theme);
   }
 
-  getSearchLine(width) {
+  getSearchLine(width, options = {}) {
+    const query = options.query ?? this.treeState.getSearchQuery();
     const prefix = this.theme.fg("muted", "Type to search:");
-    const query = this.treeState.getSearchQuery();
     const suffix = query ? ` ${this.theme.fg("accent", query)}` : "";
     return fitLine(`${prefix}${suffix}`, width, this.theme);
+  }
+
+  getNestedStickyLeftLine(width, stickyLeftDepth = null) {
+    if (!(stickyLeftDepth && stickyLeftDepth > 1)) {
+      return fitLine("", width, this.theme);
+    }
+
+    const badge = this.theme.bg(
+      "selectedBg",
+      ` ${this.theme.bold(this.theme.fg("accent", "⇤"))} ${this.theme.bold(this.theme.fg("accent", `depth ${stickyLeftDepth}`))} `,
+    );
+
+    return fitLine(`  ${badge}`, width, this.theme);
   }
 
   computeTreeHeight() {
@@ -1381,6 +1518,8 @@ export class TreeXComponent {
 
     if (this.config.treeStyle === "nested") {
       this.ensureNestedSelector();
+      const nestedTreeList = this.getNestedTreeList();
+      const stickyLeftMetrics = getNestedStickyLeftMetrics(nestedTreeList);
       const nestedLines = [...this.nestedSelector.render(safeWidth)];
       if (nestedLines.length > 2) {
         nestedLines[2] = fitLine(
@@ -1391,6 +1530,17 @@ export class TreeXComponent {
       }
       if (nestedLines.length > 3) {
         nestedLines[3] = this.getHelpLine(safeWidth);
+      }
+      if (nestedLines.length > 4) {
+        nestedLines[4] = this.getSearchLine(safeWidth, {
+          query: nestedTreeList?.getSearchQuery?.() ?? "",
+        });
+      }
+      if (nestedLines.length > 6) {
+        nestedLines[6] = this.getNestedStickyLeftLine(
+          safeWidth,
+          stickyLeftMetrics.stickyLeftShift > 0 ? stickyLeftMetrics.shallowestVisibleDepth : null,
+        );
       }
       return [...nestedLines, ...this.renderDetailPane(safeWidth, { includeTopBorder: false })];
     }
