@@ -4,6 +4,7 @@
 	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
 	"type": "module",
 	"main": "./index.js",
+	"files": ["index.js", "src", "README.md", "LICENSE"],
 	"keywords": ["pi-package"],
 	"pi": {
 		"extensions": ["./index.js"]

@@ -33,5 +33,6 @@ npm test        # run the integration test
 
 ## Notes
 
+- Tested with pi 0.67.x.
 - TreeX patches the native `/tree` path, so built-in slash command and tree hotkey keep using pi's own navigation and summary flow.
 - TreeX relies on private interactive-mode internals, so upstream pi changes may require TreeX updates.
