@@ -4,20 +4,29 @@ TreeX enhances pi's native session tree with sticky-left indentation and a botto
 
 It patches the built-in `/tree` view.
 
+## WARNING
+
+This extension patches the /tree internals and could break if pi updates in an incompatible way. I chose this approach rather than re-implementing (or copying) the internal tree rendering so that it would automatically update the rendering.
+
+
 ## Features
 
 - sticky-left view that auto-shifts deep branches left to reclaim horizontal space
 - bottom detail pane with more details for the selected row
 
-## Usage
+## Installation
 
-Load as a local extension while developing:
+### npm (coming when I get around to it)
+
+### git
 
 ```bash
-pi -e /absolute/path/to/pi-treex
+pi install git:github.com/travisp/pi-treex
 ```
 
-Or install as a pi package and then use:
+## Usage
+
+After installation, use:
 
 ```text
 /tree
