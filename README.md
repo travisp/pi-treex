@@ -18,7 +18,7 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 | Before | After |
 | --- | --- |
-| <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/before.png" alt="Built-in pi /tree view with deep indentation wasting most horizontal space" width="420" /> | <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/after.png" alt="TreeX-enhanced /tree view with sticky-left indentation and a bottom detail pane" width="420" /> |
+| <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/before.png" alt="Built-in pi /tree view with deep indentation wasting most horizontal space" width="360" /> | <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/after.png" alt="TreeX-enhanced /tree view with sticky-left indentation and a bottom detail pane" width="360" /> |
 | The built-in tree can spend most of the viewport on indentation, leaving the actual row content heavily truncated. | TreeX shifts the visible branch left and keeps the selected row readable in a persistent detail pane. |
 
 ## Detail View
