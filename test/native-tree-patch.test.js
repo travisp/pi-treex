@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { TreeSelectorComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tree-selector.js";
 import { installTreeXNativePatches } from "../src/treex-component.js";
+import treexExtension from "../treex.js";
 
 const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
 
@@ -113,4 +118,39 @@ test("native tree patch wraps the real tree selector and renders without crashin
 	assert.ok(lines[6].includes("depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
+});
+
+test("treex entry patches the host pi InteractiveMode", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-treex-host-"));
+	const distDir = join(tempDir, "dist");
+	const binDir = join(tempDir, "bin");
+	const realCliPath = join(distDir, "cli.js");
+	const symlinkCliPath = join(binDir, "pi");
+	const indexPath = join(distDir, "index.js");
+
+	await mkdir(distDir, { recursive: true });
+	await mkdir(binDir, { recursive: true });
+	await writeFile(join(tempDir, "package.json"), '{"type":"module"}\n');
+	await writeFile(realCliPath, "export {};\n");
+	await symlink("../dist/cli.js", symlinkCliPath);
+	await writeFile(
+		indexPath,
+		["export class InteractiveMode {", "  showSelector(create) {", "    return create(() => {});", "  }", "}"].join(
+			"\n",
+		),
+	);
+
+	const originalArgv1 = process.argv[1];
+	process.argv[1] = symlinkCliPath;
+
+	try {
+		const hostModule = await import(pathToFileURL(indexPath).href);
+		const before = hostModule.InteractiveMode.prototype.showSelector;
+
+		await treexExtension();
+
+		assert.notEqual(hostModule.InteractiveMode.prototype.showSelector, before);
+	} finally {
+		process.argv[1] = originalArgv1;
+	}
 });

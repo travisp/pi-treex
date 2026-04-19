@@ -3,11 +3,11 @@
 	"version": "0.1.0",
 	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
 	"type": "module",
-	"main": "./index.js",
-	"files": ["index.js", "src", "README.md", "LICENSE"],
+	"main": "./treex.js",
+	"files": ["treex.js", "src", "README.md", "LICENSE"],
 	"keywords": ["pi-package"],
 	"pi": {
-		"extensions": ["./index.js"]
+		"extensions": ["./treex.js"]
 	},
 	"scripts": {
 		"check": "biome check . && node --test",
