@@ -13,10 +13,14 @@ function getHostModuleUrl(relativePath) {
 }
 
 export default async function treeXExtension() {
-	const [{ InteractiveMode }, { ToolExecutionComponent }] = await Promise.all([
+	const [{ InteractiveMode }, { ToolExecutionComponent }, { UserMessageComponent }] = await Promise.all([
 		import(getHostModuleUrl("index.js")),
 		import(getHostModuleUrl("modes/interactive/components/tool-execution.js")),
+		import(getHostModuleUrl("modes/interactive/components/user-message.js")),
 	]);
 
-	installTreeXNativePatches(InteractiveMode, ToolExecutionComponent);
+	installTreeXNativePatches(InteractiveMode, {
+		toolExecutionComponent: ToolExecutionComponent,
+		userMessageComponent: UserMessageComponent,
+	});
 }

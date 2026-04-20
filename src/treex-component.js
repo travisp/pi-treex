@@ -16,8 +16,41 @@ function normalizeDetail(text) {
 		.trim();
 }
 
+function stripAnsi(text) {
+	let result = "";
+
+	for (let index = 0; index < text.length; index++) {
+		if (text.charCodeAt(index) !== 27) {
+			result += text[index];
+			continue;
+		}
+
+		if (text[index + 1] === "[") {
+			index += 2;
+			while (index < text.length && !/[A-Za-z]/.test(text[index])) {
+				index++;
+			}
+			continue;
+		}
+
+		if (text[index + 1] === "]") {
+			index += 2;
+			while (index < text.length) {
+				if (text[index] === "\u0007") break;
+				if (text.charCodeAt(index) === 27 && text[index + 1] === "\\") {
+					index++;
+					break;
+				}
+				index++;
+			}
+		}
+	}
+
+	return result;
+}
+
 function hasVisibleText(line) {
-	return visibleWidth(String(line ?? "").trim()) > 0;
+	return visibleWidth(stripAnsi(String(line ?? "")).trim()) > 0;
 }
 
 function safeJson(value, spacing = 0) {
@@ -345,6 +378,22 @@ function isToolResultEntry(entry) {
 	return entry.type === "message" && entry.message.role === "toolResult";
 }
 
+function compactDetailLines(lines) {
+	return lines.filter(hasVisibleText);
+}
+
+function removeSharedPrefix(baseLines, lines) {
+	let index = 0;
+	while (
+		index < baseLines.length &&
+		index < lines.length &&
+		stripAnsi(lines[index]).trimEnd() === stripAnsi(baseLines[index]).trimEnd()
+	) {
+		index++;
+	}
+	return lines.slice(index);
+}
+
 function getDetailBodyLines(lines, width, theme) {
 	const bodyLines = lines.slice(0, DETAIL_BODY_LINES);
 
@@ -362,12 +411,13 @@ function getDetailBodyLines(lines, width, theme) {
 }
 
 export class TreeXWrapper {
-	constructor(selector, mode, toolExecutionComponent) {
+	constructor(selector, mode, nativeComponents) {
 		this.selector = selector;
 		this.treeList = selector.getTreeList();
 		this.mode = mode;
 		this.tui = mode.ui;
-		this.toolExecutionComponent = toolExecutionComponent;
+		this.toolExecutionComponent = nativeComponents.toolExecutionComponent;
+		this.userMessageComponent = nativeComponents.userMessageComponent;
 		patchTreeListRender(this.treeList);
 	}
 
@@ -402,10 +452,10 @@ export class TreeXWrapper {
 		return fitLine(`  ${badge}`, width);
 	}
 
-	renderToolResultLines(entry, width) {
+	createToolExecutionComponent(entry) {
 		const message = entry.message;
 		const toolCall = this.treeList.toolCallMap.get(message.toolCallId);
-		const component = new this.toolExecutionComponent(
+		return new this.toolExecutionComponent(
 			message.toolName,
 			message.toolCallId,
 			toolCall?.arguments ?? {},
@@ -414,10 +464,40 @@ export class TreeXWrapper {
 			this.mode.ui,
 			this.mode.sessionManager.getCwd(),
 		);
+	}
 
+	renderUserMessageLines(entry, width) {
+		const text = this.mode.getUserMessageText(entry.message);
+		const component = new this.userMessageComponent(text, this.mode.getMarkdownThemeWithSettings());
+		return compactDetailLines(component.render(width));
+	}
+
+	renderToolLines(entry, width, result) {
+		const component = this.createToolExecutionComponent(entry);
 		component.setExpanded(true);
-		component.updateResult(message);
-		return component.render(width).filter(hasVisibleText);
+		if (result) {
+			component.updateResult(result);
+		}
+		return compactDetailLines(component.render(width));
+	}
+
+	renderToolResultLines(entry, width) {
+		const callLines = this.renderToolLines(entry, width);
+		const fullLines = this.renderToolLines(entry, width, entry.message);
+		const resultLines = removeSharedPrefix(callLines, fullLines);
+		return resultLines.length > 0 ? resultLines : fullLines;
+	}
+
+	getDetailContentLines(entry, info, width) {
+		if (isToolResultEntry(entry)) {
+			return this.renderToolResultLines(entry, width);
+		}
+
+		if (entry.type === "message" && entry.message.role === "user") {
+			return this.renderUserMessageLines(entry, width);
+		}
+
+		return compactDetailLines(wrapTextWithAnsi(normalizeDetail(info.full) || "(no text)", width));
 	}
 
 	renderDetailPane(theme, width) {
@@ -443,9 +523,7 @@ export class TreeXWrapper {
 		if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));
 		if (entry.id === this.treeList.currentLeafId) metadataParts.push(theme.fg("accent", "CURRENT"));
 
-		const contentLines = isToolResultEntry(entry)
-			? this.renderToolResultLines(entry, width)
-			: wrapTextWithAnsi(normalizeDetail(info.full) || "(no text)", width);
+		const contentLines = this.getDetailContentLines(entry, info, width);
 		const bodyLines = getDetailBodyLines(contentLines, width, theme);
 
 		return [
@@ -471,7 +549,7 @@ export class TreeXWrapper {
 	}
 }
 
-export function installTreeXNativePatches(InteractiveMode, toolExecutionComponent) {
+export function installTreeXNativePatches(InteractiveMode, nativeComponents) {
 	const proto = InteractiveMode?.prototype;
 	if (!proto || proto[PATCHED_SHOW_SELECTOR]) return;
 
@@ -486,7 +564,7 @@ export function installTreeXNativePatches(InteractiveMode, toolExecutionComponen
 				return result;
 			}
 
-			const wrapper = new TreeXWrapper(selector, this, toolExecutionComponent);
+			const wrapper = new TreeXWrapper(selector, this, nativeComponents);
 			return { component: wrapper, focus: wrapper };
 		});
 	};

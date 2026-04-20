@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { ToolExecutionComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { TreeSelectorComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tree-selector.js";
+import { UserMessageComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/user-message.js";
 import { installTreeXNativePatches } from "../src/treex-component.js";
 import treexExtension from "../treex.js";
 
@@ -18,6 +19,15 @@ function createTheme() {
 		bg: (_name, text) => text,
 		bold: (text) => text,
 		italic: (text) => text,
+	};
+}
+
+function createStyledTheme() {
+	return {
+		fg: (_name, text) => `\u001b[31m${text}\u001b[39m`,
+		bg: (_name, text) => `\u001b[44m${text}\u001b[49m`,
+		bold: (text) => `\u001b[1m${text}\u001b[22m`,
+		italic: (text) => `\u001b[3m${text}\u001b[23m`,
 	};
 }
 
@@ -48,6 +58,19 @@ function createInteractiveModeClass() {
 
 		getRegisteredToolDefinition() {
 			return undefined;
+		}
+
+		getMarkdownThemeWithSettings() {
+			return {};
+		}
+
+		getUserMessageText(message) {
+			if (message.role !== "user") return "";
+			if (typeof message.content === "string") return message.content;
+			return message.content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text)
+				.join("");
 		}
 
 		showSelector(create) {
@@ -139,17 +162,32 @@ function createToolResultTree() {
 	return [userRoot];
 }
 
+function createAssistantDetailTree() {
+	const assistant = makeMessageNode("assistant-detail", "user-root", {
+		role: "assistant",
+		content: "Hello\n\nI am the assistant\nAnd I'm here to help you",
+		stopReason: "stop",
+	});
+	const userRoot = makeNode("user-root", null, "say hello", [assistant]);
+	return [userRoot];
+}
+
 function renderWrappedTree({
 	tree = createTree(),
 	leafId = "branch-5",
 	initialSelectedId,
 	filterMode,
-	toolExecutionComponent,
+	toolExecutionComponent = ToolExecutionComponent,
+	userMessageComponent = UserMessageComponent,
+	theme = createTheme(),
 } = {}) {
-	globalThis[THEME_KEY] = createTheme();
+	globalThis[THEME_KEY] = theme;
 
 	const InteractiveMode = createInteractiveModeClass();
-	installTreeXNativePatches(InteractiveMode, toolExecutionComponent);
+	installTreeXNativePatches(InteractiveMode, {
+		toolExecutionComponent,
+		userMessageComponent,
+	});
 
 	const mode = new InteractiveMode(24);
 	const selector = new TreeSelectorComponent(
@@ -191,17 +229,44 @@ test("current row gets an accent marker when it is visible but not selected", ()
 	assert.ok(currentLine?.includes("│     • user: selected branch message"));
 });
 
-test("tool result detail pane uses native tool rendering without images", () => {
+test("tool result detail pane prioritizes result lines over the tool command", () => {
 	const { lines } = renderWrappedTree({
 		tree: createToolResultTree(),
 		leafId: "tool-result",
 		initialSelectedId: "tool-result",
 		filterMode: "all",
 		toolExecutionComponent: ToolExecutionComponent,
+		theme: createStyledTheme(),
 	});
 
-	assert.ok(lines.some((line) => line.includes("$ echo hello")));
+	assert.ok(!lines.some((line) => line.includes("$ echo hello")));
 	assert.ok(lines.some((line) => line.includes("line 1")));
+	assert.ok(lines.some((line) => line.includes("line 2")));
+});
+
+test("detail pane removes blank lines from wrapped text content", () => {
+	const { lines } = renderWrappedTree({
+		tree: createAssistantDetailTree(),
+		leafId: "assistant-detail",
+		initialSelectedId: "assistant-detail",
+		filterMode: "all",
+	});
+
+	assert.ok(lines.some((line) => line.includes("Hello")));
+	assert.ok(lines.some((line) => line.includes("I am the assistant")));
+	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));
+});
+
+test("detail pane can render user messages with native styling", () => {
+	const { lines } = renderWrappedTree({
+		tree: createAssistantDetailTree(),
+		leafId: "assistant-detail",
+		initialSelectedId: "user-root",
+		theme: createStyledTheme(),
+	});
+
+	assert.ok(lines.some((line) => line.includes("\u001b[44m")));
+	assert.ok(lines.some((line) => line.includes("say hello")));
 });
 
 test("treex entry patches the host pi InteractiveMode", async () => {
@@ -213,6 +278,7 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 	const indexPath = join(distDir, "index.js");
 	const toolExecutionDir = join(distDir, "modes", "interactive", "components");
 	const toolExecutionPath = join(toolExecutionDir, "tool-execution.js");
+	const userMessagePath = join(toolExecutionDir, "user-message.js");
 
 	await mkdir(distDir, { recursive: true });
 	await mkdir(binDir, { recursive: true });
@@ -227,6 +293,7 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 		),
 	);
 	await writeFile(toolExecutionPath, "export class ToolExecutionComponent {}\n");
+	await writeFile(userMessagePath, "export class UserMessageComponent {}\n");
 
 	const originalArgv1 = process.argv[1];
 	process.argv[1] = symlinkCliPath;
