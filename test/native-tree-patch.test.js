@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { ToolExecutionComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { TreeSelectorComponent } from "../node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tree-selector.js";
 import { installTreeXNativePatches } from "../src/treex-component.js";
 import treexExtension from "../treex.js";
@@ -41,7 +42,12 @@ function createInteractiveModeClass() {
 			};
 			this.sessionManager = {
 				getLeafId: () => "branch-5",
+				getCwd: () => process.cwd(),
 			};
+		}
+
+		getRegisteredToolDefinition() {
+			return undefined;
 		}
 
 		showSelector(create) {
@@ -76,6 +82,19 @@ function makeNode(id, parentId, text, children = []) {
 	};
 }
 
+function makeMessageNode(id, parentId, message, children = []) {
+	return {
+		entry: {
+			id,
+			parentId,
+			timestamp: "2024-01-01T00:00:00.000Z",
+			type: "message",
+			message,
+		},
+		children,
+	};
+}
+
 function createTree() {
 	const branch8 = makeNode("branch-8", "branch-7", "branch message 8");
 	const branch7 = makeNode("branch-7", "branch-6", "branch message 7", [branch8]);
@@ -89,6 +108,35 @@ function createTree() {
 	const sibling = makeNode("sibling", "root", "sibling branch");
 	const root = makeNode("root", null, "root", [branch, sibling]);
 	return [root];
+}
+
+function createToolResultTree() {
+	const toolResult = makeMessageNode("tool-result", "assistant-tool-call", {
+		role: "toolResult",
+		toolCallId: "call-bash-1",
+		toolName: "bash",
+		content: [{ type: "text", text: "line 1\nline 2" }],
+		isError: false,
+	});
+	const assistantToolCall = makeMessageNode(
+		"assistant-tool-call",
+		"user-root",
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call-bash-1",
+					name: "bash",
+					arguments: { command: "echo hello" },
+				},
+			],
+			stopReason: "toolUse",
+		},
+		[toolResult],
+	);
+	const userRoot = makeNode("user-root", null, "run the command", [assistantToolCall]);
+	return [userRoot];
 }
 
 test("native tree patch wraps the real tree selector and renders without crashing", () => {
@@ -120,6 +168,32 @@ test("native tree patch wraps the real tree selector and renders without crashin
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
 });
 
+test("tool result detail pane uses native tool rendering without images", () => {
+	globalThis[THEME_KEY] = createTheme();
+
+	const InteractiveMode = createInteractiveModeClass();
+	installTreeXNativePatches(InteractiveMode, ToolExecutionComponent);
+
+	const mode = new InteractiveMode(24);
+	const selector = new TreeSelectorComponent(
+		createToolResultTree(),
+		"tool-result",
+		24,
+		() => {},
+		() => {},
+		() => {},
+		"tool-result",
+		"all",
+	);
+
+	mode.showSelector(() => ({ component: selector, focus: selector }));
+
+	const lines = mode.child.render(80);
+
+	assert.ok(lines.some((line) => line.includes("$ echo hello")));
+	assert.ok(lines.some((line) => line.includes("line 1")));
+});
+
 test("treex entry patches the host pi InteractiveMode", async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-treex-host-"));
 	const distDir = join(tempDir, "dist");
@@ -127,9 +201,12 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 	const realCliPath = join(distDir, "cli.js");
 	const symlinkCliPath = join(binDir, "pi");
 	const indexPath = join(distDir, "index.js");
+	const toolExecutionDir = join(distDir, "modes", "interactive", "components");
+	const toolExecutionPath = join(toolExecutionDir, "tool-execution.js");
 
 	await mkdir(distDir, { recursive: true });
 	await mkdir(binDir, { recursive: true });
+	await mkdir(toolExecutionDir, { recursive: true });
 	await writeFile(join(tempDir, "package.json"), '{"type":"module"}\n');
 	await writeFile(realCliPath, "export {};\n");
 	await symlink("../dist/cli.js", symlinkCliPath);
@@ -139,6 +216,7 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 			"\n",
 		),
 	);
+	await writeFile(toolExecutionPath, "export class ToolExecutionComponent {}\n");
 
 	const originalArgv1 = process.argv[1];
 	process.argv[1] = symlinkCliPath;

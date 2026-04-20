@@ -1,18 +1,22 @@
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { installTreeXNativePatches } from "./src/treex-component.js";
 
-async function loadInteractiveMode() {
-	const resolvedCliPath = process.argv[1] ? realpathSync(process.argv[1]) : undefined;
-	const hostIndexPath = resolvedCliPath ? resolve(dirname(resolvedCliPath), "index.js") : undefined;
-	const entry =
-		hostIndexPath && existsSync(hostIndexPath) ? pathToFileURL(hostIndexPath).href : "@mariozechner/pi-coding-agent";
-	const { InteractiveMode } = await import(entry);
-	return InteractiveMode;
+function getHostDistDir() {
+	return dirname(realpathSync(process.argv[1]));
+}
+
+function getHostModuleUrl(relativePath) {
+	return pathToFileURL(resolve(getHostDistDir(), relativePath)).href;
 }
 
 export default async function treeXExtension() {
-	installTreeXNativePatches(await loadInteractiveMode());
+	const [{ InteractiveMode }, { ToolExecutionComponent }] = await Promise.all([
+		import(getHostModuleUrl("index.js")),
+		import(getHostModuleUrl("modes/interactive/components/tool-execution.js")),
+	]);
+
+	installTreeXNativePatches(InteractiveMode, ToolExecutionComponent);
 }

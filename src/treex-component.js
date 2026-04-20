@@ -15,6 +15,10 @@ function normalizeDetail(text) {
 		.trim();
 }
 
+function hasVisibleText(line) {
+	return visibleWidth(String(line ?? "").trim()) > 0;
+}
+
 function safeJson(value, spacing = 0) {
 	try {
 		return JSON.stringify(value, null, spacing);
@@ -213,14 +217,9 @@ function describeEntry(treeList, node) {
 			}
 
 			if (message.role === "toolResult") {
-				const toolCall = message.toolCallId ? treeList.toolCallMap.get(message.toolCallId) : undefined;
-				const toolName = message.toolName ?? toolCall?.name;
 				return {
 					kind: "TOOL RESULT",
-					full:
-						extractDetailContent(treeList, message.content, { includeToolCalls: true, verboseToolCalls: true }) ||
-						(toolCall ? formatToolCallVerbose(toolCall.name, toolCall.arguments) : `[${toolName ?? "tool"}]`),
-					toolName,
+					toolName: message.toolName,
 				};
 			}
 
@@ -307,11 +306,33 @@ function getTreeSelector(result) {
 	return null;
 }
 
+function isToolResultEntry(entry) {
+	return entry.type === "message" && entry.message.role === "toolResult";
+}
+
+function getDetailBodyLines(lines, width, theme) {
+	const bodyLines = lines.slice(0, DETAIL_BODY_LINES);
+
+	if (lines.length > DETAIL_BODY_LINES) {
+		const lastLineIndex = bodyLines.length - 1;
+		bodyLines[lastLineIndex] =
+			truncateToWidth(bodyLines[lastLineIndex], Math.max(1, width - 1), "") + theme.fg("muted", "…");
+	}
+
+	while (bodyLines.length < DETAIL_BODY_LINES) {
+		bodyLines.push("");
+	}
+
+	return bodyLines;
+}
+
 export class TreeXWrapper {
-	constructor(selector, tui) {
+	constructor(selector, mode, toolExecutionComponent) {
 		this.selector = selector;
 		this.treeList = selector.getTreeList();
-		this.tui = tui;
+		this.mode = mode;
+		this.tui = mode.ui;
+		this.toolExecutionComponent = toolExecutionComponent;
 		patchTreeListRender(this.treeList);
 	}
 
@@ -346,6 +367,24 @@ export class TreeXWrapper {
 		return fitLine(`  ${badge}`, width);
 	}
 
+	renderToolResultLines(entry, width) {
+		const message = entry.message;
+		const toolCall = this.treeList.toolCallMap.get(message.toolCallId);
+		const component = new this.toolExecutionComponent(
+			message.toolName,
+			message.toolCallId,
+			toolCall?.arguments ?? {},
+			{ showImages: false },
+			this.mode.getRegisteredToolDefinition(message.toolName),
+			this.mode.ui,
+			this.mode.sessionManager.getCwd(),
+		);
+
+		component.setExpanded(true);
+		component.updateResult(message);
+		return component.render(width).filter(hasVisibleText);
+	}
+
 	renderDetailPane(theme, width) {
 		const selected = this.treeList.filteredNodes[this.treeList.selectedIndex];
 
@@ -357,29 +396,22 @@ export class TreeXWrapper {
 			];
 		}
 
+		const entry = selected.node.entry;
 		const info = describeEntry(this.treeList, selected.node);
 		const metadataParts = [
 			theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`)),
 			theme.bold(info.kind),
-			theme.fg("muted", formatRelativeTime(selected.node.entry.timestamp)),
+			theme.fg("muted", formatRelativeTime(entry.timestamp)),
 		];
 
 		if (info.toolName) metadataParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
 		if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));
-		if (selected.node.entry.id === this.treeList.currentLeafId) metadataParts.push(theme.fg("accent", "CURRENT"));
+		if (entry.id === this.treeList.currentLeafId) metadataParts.push(theme.fg("accent", "CURRENT"));
 
-		const wrappedLines = wrapTextWithAnsi(normalizeDetail(info.full) || "(no text)", width);
-		const bodyLines = wrappedLines.slice(0, DETAIL_BODY_LINES);
-
-		if (wrappedLines.length > DETAIL_BODY_LINES) {
-			const lastLineIndex = bodyLines.length - 1;
-			bodyLines[lastLineIndex] =
-				truncateToWidth(bodyLines[lastLineIndex], Math.max(1, width - 1), "") + theme.fg("muted", "…");
-		}
-
-		while (bodyLines.length < DETAIL_BODY_LINES) {
-			bodyLines.push("");
-		}
+		const contentLines = isToolResultEntry(entry)
+			? this.renderToolResultLines(entry, width)
+			: wrapTextWithAnsi(normalizeDetail(info.full) || "(no text)", width);
+		const bodyLines = getDetailBodyLines(contentLines, width, theme);
 
 		return [
 			fitLine(metadataParts.join(theme.fg("muted", " · ")), width),
@@ -404,7 +436,7 @@ export class TreeXWrapper {
 	}
 }
 
-export function installTreeXNativePatches(InteractiveMode) {
+export function installTreeXNativePatches(InteractiveMode, toolExecutionComponent) {
 	const proto = InteractiveMode?.prototype;
 	if (!proto || proto[PATCHED_SHOW_SELECTOR]) return;
 
@@ -419,7 +451,7 @@ export function installTreeXNativePatches(InteractiveMode) {
 				return result;
 			}
 
-			const wrapper = new TreeXWrapper(selector, this.ui);
+			const wrapper = new TreeXWrapper(selector, this, toolExecutionComponent);
 			return { component: wrapper, focus: wrapper };
 		});
 	};
