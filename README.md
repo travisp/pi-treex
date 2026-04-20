@@ -13,6 +13,7 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 - sticky-left view that auto-shifts deep branches left to reclaim horizontal space
 - bottom detail pane with more details for the selected row
+- Adds a ◆ marker to the current point in the session tree more easily see where when changing lines.
 
 ## Screenshots
 
