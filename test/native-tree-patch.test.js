@@ -139,56 +139,66 @@ function createToolResultTree() {
 	return [userRoot];
 }
 
-test("native tree patch wraps the real tree selector and renders without crashing", () => {
+function renderWrappedTree({
+	tree = createTree(),
+	leafId = "branch-5",
+	initialSelectedId,
+	filterMode,
+	toolExecutionComponent,
+} = {}) {
 	globalThis[THEME_KEY] = createTheme();
 
 	const InteractiveMode = createInteractiveModeClass();
-	installTreeXNativePatches(InteractiveMode);
+	installTreeXNativePatches(InteractiveMode, toolExecutionComponent);
 
 	const mode = new InteractiveMode(24);
 	const selector = new TreeSelectorComponent(
-		createTree(),
-		"branch-5",
+		tree,
+		leafId,
 		24,
 		() => {},
 		() => {},
 		() => {},
+		initialSelectedId,
+		filterMode,
 	);
 
 	mode.showSelector(() => ({ component: selector, focus: selector }));
+	return { mode, selector, lines: mode.child.render(80) };
+}
 
+function findLine(lines, text) {
+	return lines.find((line) => line.includes(text));
+}
+
+test("native tree patch wraps the real tree selector and renders without crashing", () => {
+	const { mode, selector, lines } = renderWrappedTree();
 	const wrapper = mode.child;
+
 	assert.notEqual(wrapper, selector);
 	assert.equal(mode.focus, wrapper);
-
-	const lines = wrapper.render(80);
-
 	assert.ok(lines[6].includes("depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
+	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
+});
+
+test("current row gets an accent marker when it is visible but not selected", () => {
+	const { lines } = renderWrappedTree({ initialSelectedId: "branch-6" });
+	const currentLine = findLine(lines, "selected branch message");
+
+	assert.ok(currentLine?.startsWith("◆ "));
+	assert.ok(currentLine?.includes("│     • user: selected branch message"));
 });
 
 test("tool result detail pane uses native tool rendering without images", () => {
-	globalThis[THEME_KEY] = createTheme();
-
-	const InteractiveMode = createInteractiveModeClass();
-	installTreeXNativePatches(InteractiveMode, ToolExecutionComponent);
-
-	const mode = new InteractiveMode(24);
-	const selector = new TreeSelectorComponent(
-		createToolResultTree(),
-		"tool-result",
-		24,
-		() => {},
-		() => {},
-		() => {},
-		"tool-result",
-		"all",
-	);
-
-	mode.showSelector(() => ({ component: selector, focus: selector }));
-
-	const lines = mode.child.render(80);
+	const { lines } = renderWrappedTree({
+		tree: createToolResultTree(),
+		leafId: "tool-result",
+		initialSelectedId: "tool-result",
+		filterMode: "all",
+		toolExecutionComponent: ToolExecutionComponent,
+	});
 
 	assert.ok(lines.some((line) => line.includes("$ echo hello")));
 	assert.ok(lines.some((line) => line.includes("line 1")));

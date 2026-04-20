@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
+const CURRENT_ROW_MARKER = "◆";
 const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
 const PATCHED_SHOW_SELECTOR = Symbol.for("pi-treex:show-selector-patched");
 
@@ -113,6 +114,68 @@ function shiftGutters(gutters, stickyLeftShift) {
 		.filter((gutter) => gutter.position >= 0);
 }
 
+function getLeadingAnsiLength(line) {
+	let index = 0;
+
+	while (line.startsWith("\u001b[", index)) {
+		index += 2;
+		while (index < line.length && !/[A-Za-z]/.test(line[index])) {
+			index++;
+		}
+		index++;
+	}
+
+	return index;
+}
+
+function replaceCursorSlot(line, replacement) {
+	const prefixLength = getLeadingAnsiLength(line);
+	// Native tree rows start with a 2-cell cursor slot ("› " or "  "), possibly after ANSI styling.
+	return `${line.slice(0, prefixLength)}${replacement}${line.slice(prefixLength + 2)}`;
+}
+
+function markCurrentLine(treeList, lines) {
+	const { startIndex, endIndex } = getVisibleWindow(treeList);
+	const currentIndex = treeList.filteredNodes.findIndex((node) => node.node.entry.id === treeList.currentLeafId);
+	if (currentIndex < startIndex || currentIndex >= endIndex) return lines;
+
+	const theme = getTheme();
+	const marker = `${theme.bold(theme.fg("accent", CURRENT_ROW_MARKER))} `;
+	lines[currentIndex - startIndex] = replaceCursorSlot(lines[currentIndex - startIndex], marker);
+	return lines;
+}
+
+function renderWithStickyLeft(treeList, width, originalRender) {
+	const { startIndex, endIndex, stickyLeftShift } = getStickyLeftState(treeList);
+	if (stickyLeftShift === 0) {
+		return originalRender(width);
+	}
+
+	const originalNodes = [];
+	for (let index = startIndex; index < endIndex; index++) {
+		const flatNode = treeList.filteredNodes[index];
+		const shiftedIndent = Math.max(0, getDisplayIndent(treeList, flatNode) - stickyLeftShift);
+
+		originalNodes.push({
+			flatNode,
+			indent: flatNode.indent,
+			gutters: flatNode.gutters,
+		});
+
+		flatNode.indent = treeList.multipleRoots ? shiftedIndent + 1 : shiftedIndent;
+		flatNode.gutters = shiftGutters(flatNode.gutters, stickyLeftShift);
+	}
+
+	try {
+		return originalRender(width);
+	} finally {
+		for (const originalNode of originalNodes) {
+			originalNode.flatNode.indent = originalNode.indent;
+			originalNode.flatNode.gutters = originalNode.gutters;
+		}
+	}
+}
+
 function patchTreeListRender(treeList) {
 	if (treeList.__treexStickyLeftPatched) return;
 
@@ -120,35 +183,7 @@ function patchTreeListRender(treeList) {
 	treeList.__treexStickyLeftPatched = true;
 
 	treeList.render = function renderStickyLeft(width) {
-		const { startIndex, endIndex, stickyLeftShift } = getStickyLeftState(this);
-		if (stickyLeftShift === 0) {
-			return originalRender(width);
-		}
-
-		const originalNodes = [];
-
-		for (let index = startIndex; index < endIndex; index++) {
-			const flatNode = this.filteredNodes[index];
-			const shiftedIndent = Math.max(0, getDisplayIndent(this, flatNode) - stickyLeftShift);
-
-			originalNodes.push({
-				flatNode,
-				indent: flatNode.indent,
-				gutters: flatNode.gutters,
-			});
-
-			flatNode.indent = this.multipleRoots ? shiftedIndent + 1 : shiftedIndent;
-			flatNode.gutters = shiftGutters(flatNode.gutters, stickyLeftShift);
-		}
-
-		try {
-			return originalRender(width);
-		} finally {
-			for (const originalNode of originalNodes) {
-				originalNode.flatNode.indent = originalNode.indent;
-				originalNode.flatNode.gutters = originalNode.gutters;
-			}
-		}
+		return markCurrentLine(this, renderWithStickyLeft(this, width, originalRender));
 	};
 }
 
