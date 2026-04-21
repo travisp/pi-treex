@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/p
 const DETAIL_BODY_LINES = 3;
 const CURRENT_ROW_MARKER = "◆";
 const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
-const PATCHED_SHOW_SELECTOR = Symbol.for("pi-treex:show-selector-patched");
+const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
 
 function getTheme() {
 	return globalThis[THEME_KEY];
@@ -549,14 +549,23 @@ export class TreeXWrapper {
 	}
 }
 
+function uninstallTreeXNativePatches(InteractiveMode) {
+	const proto = InteractiveMode.prototype;
+	const patch = proto[SHOW_SELECTOR_PATCH];
+	if (!patch) return;
+
+	if (proto.showSelector === patch.patched) {
+		proto.showSelector = patch.original;
+	}
+	delete proto[SHOW_SELECTOR_PATCH];
+}
+
 export function installTreeXNativePatches(InteractiveMode, nativeComponents) {
-	const proto = InteractiveMode?.prototype;
-	if (!proto || proto[PATCHED_SHOW_SELECTOR]) return;
+	const proto = InteractiveMode.prototype;
+	uninstallTreeXNativePatches(InteractiveMode);
 
 	const originalShowSelector = proto.showSelector;
-	proto[PATCHED_SHOW_SELECTOR] = true;
-
-	proto.showSelector = function treexShowSelector(create) {
+	const patchedShowSelector = function treexShowSelector(create) {
 		return originalShowSelector.call(this, (done) => {
 			const result = create(done);
 			const selector = getTreeSelector(result);
@@ -568,4 +577,11 @@ export function installTreeXNativePatches(InteractiveMode, nativeComponents) {
 			return { component: wrapper, focus: wrapper };
 		});
 	};
+
+	proto.showSelector = patchedShowSelector;
+	proto[SHOW_SELECTOR_PATCH] = {
+		original: originalShowSelector,
+		patched: patchedShowSelector,
+	};
+	return () => uninstallTreeXNativePatches(InteractiveMode);
 }

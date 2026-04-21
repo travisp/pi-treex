@@ -12,15 +12,17 @@ function getHostModuleUrl(relativePath) {
 	return pathToFileURL(resolve(getHostDistDir(), relativePath)).href;
 }
 
-export default async function treeXExtension() {
+export default async function treeXExtension(pi) {
 	const [{ InteractiveMode }, { ToolExecutionComponent }, { UserMessageComponent }] = await Promise.all([
 		import(getHostModuleUrl("index.js")),
 		import(getHostModuleUrl("modes/interactive/components/tool-execution.js")),
 		import(getHostModuleUrl("modes/interactive/components/user-message.js")),
 	]);
 
-	installTreeXNativePatches(InteractiveMode, {
+	const unpatch = installTreeXNativePatches(InteractiveMode, {
 		toolExecutionComponent: ToolExecutionComponent,
 		userMessageComponent: UserMessageComponent,
 	});
+
+	pi.on("session_shutdown", unpatch);
 }

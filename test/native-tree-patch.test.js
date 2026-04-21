@@ -172,22 +172,28 @@ function createAssistantDetailTree() {
 	return [userRoot];
 }
 
+function createNativeComponents({
+	toolExecutionComponent = ToolExecutionComponent,
+	userMessageComponent = UserMessageComponent,
+} = {}) {
+	return {
+		toolExecutionComponent,
+		userMessageComponent,
+	};
+}
+
 function renderWrappedTree({
 	tree = createTree(),
 	leafId = "branch-5",
 	initialSelectedId,
 	filterMode,
-	toolExecutionComponent = ToolExecutionComponent,
-	userMessageComponent = UserMessageComponent,
+	nativeComponents = createNativeComponents(),
 	theme = createTheme(),
 } = {}) {
 	globalThis[THEME_KEY] = theme;
 
 	const InteractiveMode = createInteractiveModeClass();
-	installTreeXNativePatches(InteractiveMode, {
-		toolExecutionComponent,
-		userMessageComponent,
-	});
+	installTreeXNativePatches(InteractiveMode, nativeComponents);
 
 	const mode = new InteractiveMode(24);
 	const selector = new TreeSelectorComponent(
@@ -208,6 +214,24 @@ function renderWrappedTree({
 function findLine(lines, text) {
 	return lines.find((line) => line.includes(text));
 }
+
+test("native tree patch can be removed and reinstalled", () => {
+	const InteractiveMode = createInteractiveModeClass();
+	const originalShowSelector = InteractiveMode.prototype.showSelector;
+	const nativeComponents = createNativeComponents();
+
+	const firstUnpatch = installTreeXNativePatches(InteractiveMode, nativeComponents);
+	assert.notEqual(InteractiveMode.prototype.showSelector, originalShowSelector);
+
+	firstUnpatch();
+	assert.equal(InteractiveMode.prototype.showSelector, originalShowSelector);
+
+	const secondUnpatch = installTreeXNativePatches(InteractiveMode, nativeComponents);
+	assert.notEqual(InteractiveMode.prototype.showSelector, originalShowSelector);
+
+	secondUnpatch();
+	assert.equal(InteractiveMode.prototype.showSelector, originalShowSelector);
+});
 
 test("native tree patch wraps the real tree selector and renders without crashing", () => {
 	const { mode, selector, lines } = renderWrappedTree();
@@ -235,7 +259,6 @@ test("tool result detail pane prioritizes result lines over the tool command", (
 		leafId: "tool-result",
 		initialSelectedId: "tool-result",
 		filterMode: "all",
-		toolExecutionComponent: ToolExecutionComponent,
 		theme: createStyledTheme(),
 	});
 
@@ -301,9 +324,24 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 	try {
 		const hostModule = await import(pathToFileURL(indexPath).href);
 		const before = hostModule.InteractiveMode.prototype.showSelector;
+		const handlers = new Map();
 
-		await treexExtension();
+		await treexExtension({
+			on(event, handler) {
+				handlers.set(event, handler);
+			},
+		});
+		assert.notEqual(hostModule.InteractiveMode.prototype.showSelector, before);
 
+		assert.ok(handlers.has("session_shutdown"));
+		await handlers.get("session_shutdown")();
+		assert.equal(hostModule.InteractiveMode.prototype.showSelector, before);
+
+		await treexExtension({
+			on(event, handler) {
+				handlers.set(event, handler);
+			},
+		});
 		assert.notEqual(hostModule.InteractiveMode.prototype.showSelector, before);
 	} finally {
 		process.argv[1] = originalArgv1;
