@@ -253,6 +253,21 @@ test("current row gets an accent marker when it is visible but not selected", ()
 	assert.ok(currentLine?.includes("│     • user: selected branch message"));
 });
 
+test("current row marker stays visible when its surrounding branch is folded", () => {
+	const { mode } = renderWrappedTree();
+	const treeList = mode.child.treeList;
+
+	treeList.foldedNodes.add("branch-4");
+	treeList.applyFilter();
+
+	const lines = mode.child.render(80);
+	const currentLine = findLine(lines, "branch message 4");
+
+	assert.ok(!lines.some((line) => line.includes("selected branch message")));
+	assert.ok(currentLine?.startsWith("◆ "));
+	assert.ok(currentLine?.includes("branch message 4"));
+});
+
 test("tool result detail pane prioritizes result lines over the tool command", () => {
 	const { lines } = renderWrappedTree({
 		tree: createToolResultTree(),
