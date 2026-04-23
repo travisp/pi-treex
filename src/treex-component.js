@@ -1,3 +1,10 @@
+import {
+	buildSessionContext,
+	calculateContextTokens,
+	estimateTokens,
+	getLastAssistantUsage,
+	getLatestCompactionEntry,
+} from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
@@ -370,6 +377,103 @@ function getVisibleTreeRows(tui) {
 	return Math.max(5, Math.floor(tui.terminal.rows / 2) - (DETAIL_BODY_LINES + 2));
 }
 
+// Detail pane context helpers
+function getDetailContextUsage(session, entry) {
+	const branchEntries = session.sessionManager.getBranch(entry.id);
+	const sessionContext = buildSessionContext(session.sessionManager.getEntries(), entry.id);
+	const modelIdentity = sessionContext.model ?? findLastAssistantModel(branchEntries);
+	if (!modelIdentity) return null;
+
+	const contextWindow = session.modelRegistry.find(modelIdentity.provider, modelIdentity.modelId)?.contextWindow;
+	if (!contextWindow) return null;
+
+	const latestCompaction = getLatestCompactionEntry(branchEntries);
+	if (latestCompaction) {
+		const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
+		const usage = getLastAssistantUsage(branchEntries.slice(compactionIndex + 1));
+		if (!usage || calculateContextTokens(usage) === 0) {
+			return { percent: null, contextWindow };
+		}
+	}
+
+	return {
+		percent: (estimateContextTokensFromMessages(sessionContext.messages) / contextWindow) * 100,
+		contextWindow,
+	};
+}
+
+function findLastAssistantModel(branchEntries) {
+	for (let index = branchEntries.length - 1; index >= 0; index--) {
+		const entry = branchEntries[index];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		if (!entry.message.provider || !entry.message.model) continue;
+		return {
+			provider: entry.message.provider,
+			modelId: entry.message.model,
+		};
+	}
+
+	return null;
+}
+
+function estimateContextTokensFromMessages(messages) {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message.role !== "assistant") continue;
+		if (message.stopReason === "aborted" || message.stopReason === "error" || !message.usage) continue;
+
+		let trailingTokens = 0;
+		for (let trailingIndex = index + 1; trailingIndex < messages.length; trailingIndex++) {
+			trailingTokens += estimateTokens(messages[trailingIndex]);
+		}
+
+		return calculateContextTokens(message.usage) + trailingTokens;
+	}
+
+	let estimatedTokens = 0;
+	for (const message of messages) {
+		estimatedTokens += estimateTokens(message);
+	}
+	return estimatedTokens;
+}
+
+function formatShortTokenCount(count) {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
+}
+
+function formatDetailContextUsage(theme, contextUsage) {
+	if (!contextUsage) return null;
+
+	const display =
+		contextUsage.percent === null
+			? `?/${formatShortTokenCount(contextUsage.contextWindow)}`
+			: `${contextUsage.percent.toFixed(1)}%/${formatShortTokenCount(contextUsage.contextWindow)}`;
+
+	if (contextUsage.percent === null) {
+		return theme.fg("muted", display);
+	}
+	if (contextUsage.percent > 90) {
+		return theme.fg("error", display);
+	}
+	if (contextUsage.percent > 70) {
+		return theme.fg("warning", display);
+	}
+	return theme.fg("muted", display);
+}
+
+function getCurrentDirection(treeList) {
+	const selected = treeList.filteredNodes[treeList.selectedIndex];
+	if (!treeList.currentLeafId || !selected || selected.node.entry.id === treeList.currentLeafId) return null;
+
+	const currentFlatIndex = treeList.flatNodes.findIndex((node) => node.node.entry.id === treeList.currentLeafId);
+	const selectedFlatIndex = treeList.flatNodes.findIndex((node) => node.node.entry.id === selected.node.entry.id);
+	return currentFlatIndex < selectedFlatIndex ? "up" : "down";
+}
+
 function getTreeSelector(result) {
 	if (typeof result?.focus?.getTreeList === "function") return result.focus;
 	if (typeof result?.component?.getTreeList === "function") return result.component;
@@ -515,11 +619,18 @@ export class TreeXWrapper {
 
 		const entry = selected.node.entry;
 		const info = describeEntry(this.treeList, selected.node);
-		const metadataParts = [
-			theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`)),
-			theme.bold(info.kind),
-			theme.fg("muted", formatRelativeTime(entry.timestamp)),
-		];
+		const contextUsage = getDetailContextUsage(this.mode.session, entry);
+		const currentDirection = getCurrentDirection(this.treeList);
+		const metadataParts = [theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`))];
+
+		if (currentDirection) {
+			metadataParts.push(theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT")));
+		}
+
+		const contextPart = formatDetailContextUsage(theme, contextUsage);
+		if (contextPart) metadataParts.push(contextPart);
+
+		metadataParts.push(theme.bold(info.kind), theme.fg("muted", formatRelativeTime(entry.timestamp)));
 
 		if (info.toolName) metadataParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
 		if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));

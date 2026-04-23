@@ -118,6 +118,37 @@ function makeMessageNode(id, parentId, message, children = []) {
 	};
 }
 
+function collectEntries(tree) {
+	const entries = [];
+	const stack = [...tree].reverse();
+
+	while (stack.length > 0) {
+		const node = stack.pop();
+		entries.push(node.entry);
+		for (let index = node.children.length - 1; index >= 0; index--) {
+			stack.push(node.children[index]);
+		}
+	}
+
+	return entries;
+}
+
+function getBranchEntries(tree, entryId) {
+	const entries = collectEntries(tree);
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	const branch = [];
+	let currentId = entryId;
+
+	while (currentId) {
+		const entry = byId.get(currentId);
+		if (!entry) break;
+		branch.push(entry);
+		currentId = entry.parentId;
+	}
+
+	return branch.reverse();
+}
+
 function createTree() {
 	const branch8 = makeNode("branch-8", "branch-7", "branch message 8");
 	const branch7 = makeNode("branch-7", "branch-6", "branch message 7", [branch8]);
@@ -165,8 +196,26 @@ function createToolResultTree() {
 function createAssistantDetailTree() {
 	const assistant = makeMessageNode("assistant-detail", "user-root", {
 		role: "assistant",
-		content: "Hello\n\nI am the assistant\nAnd I'm here to help you",
+		content: [{ type: "text", text: "Hello\n\nI am the assistant\nAnd I'm here to help you" }],
+		api: "openai-responses",
+		provider: "openai",
+		model: "gpt-test",
+		usage: {
+			input: 12000,
+			output: 345,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 12345,
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				total: 0,
+			},
+		},
 		stopReason: "stop",
+		timestamp: 1704067200000,
 	});
 	const userRoot = makeNode("user-root", null, "say hello", [assistant]);
 	return [userRoot];
@@ -189,6 +238,7 @@ function renderWrappedTree({
 	filterMode,
 	nativeComponents = createNativeComponents(),
 	theme = createTheme(),
+	modelRegistry = { find: () => undefined },
 } = {}) {
 	globalThis[THEME_KEY] = theme;
 
@@ -196,6 +246,14 @@ function renderWrappedTree({
 	installTreeXNativePatches(InteractiveMode, nativeComponents);
 
 	const mode = new InteractiveMode(24);
+	const entries = collectEntries(tree);
+	mode.sessionManager.getEntries = () => entries;
+	mode.sessionManager.getBranch = (entryId = leafId) => getBranchEntries(tree, entryId);
+	mode.session = {
+		sessionManager: mode.sessionManager,
+		modelRegistry,
+	};
+
 	const selector = new TreeSelectorComponent(
 		tree,
 		leafId,
@@ -251,6 +309,13 @@ test("current row gets an accent marker when it is visible but not selected", ()
 
 	assert.ok(currentLine?.startsWith("◆ "));
 	assert.ok(currentLine?.includes("│     • user: selected branch message"));
+	assert.ok(lines.some((line) => line.includes("↑ CURRENT")));
+});
+
+test("detail pane shows when current is below the selected row", () => {
+	const { lines } = renderWrappedTree({ initialSelectedId: "branch-4" });
+
+	assert.ok(lines.some((line) => line.includes("↓ CURRENT")));
 });
 
 test("current row marker stays visible when its surrounding branch is folded", () => {
@@ -288,8 +353,17 @@ test("detail pane removes blank lines from wrapped text content", () => {
 		leafId: "assistant-detail",
 		initialSelectedId: "assistant-detail",
 		filterMode: "all",
+		modelRegistry: {
+			find(provider, modelId) {
+				if (provider === "openai" && modelId === "gpt-test") {
+					return { contextWindow: 100000 };
+				}
+				return undefined;
+			},
+		},
 	});
 
+	assert.ok(lines.some((line) => line.includes("12.3%/100k")));
 	assert.ok(lines.some((line) => line.includes("Hello")));
 	assert.ok(lines.some((line) => line.includes("I am the assistant")));
 	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));

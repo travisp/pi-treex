@@ -13,7 +13,8 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 - sticky-left view that auto-shifts deep branches left to reclaim horizontal space
 - bottom detail pane with more details for the selected row
-- Adds a ◆ marker to the current point in the session tree more easily see where when changing lines.
+- detail metadata shows context usage for the selected point when it can be inferred
+- Adds a ◆ marker to the current point in the session tree, plus an ↑/↓ CURRENT hint in the detail pane when you're browsing away from it.
 
 ## Screenshots
 
@@ -24,7 +25,9 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 ## Detail View
 
-The detail view shows the depth of the currently selected item, what type of item it is, and how long ago it occurred. For a tool, it will display what the tool result was. For a user or assistant message, it will display as much of the message as it can.
+The detail view shows the depth of the currently selected item, what type of item it is, how long ago it occurred, and context usage for that point in the conversation when it can be inferred. For a tool, it will display what the tool result was. For a user or assistant message, it will display as much of the message as it can.
+
+Context usage mirrors pi's own footer behavior: after a trailing user message it may be estimated from the last assistant usage, so it can differ slightly from the following assistant row's provider-reported value.
 
 ## Installation
 
