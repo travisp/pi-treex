@@ -623,10 +623,6 @@ export class TreeXWrapper {
 		const currentDirection = getCurrentDirection(this.treeList);
 		const metadataParts = [theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`))];
 
-		if (currentDirection) {
-			metadataParts.push(theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT")));
-		}
-
 		const contextPart = formatDetailContextUsage(theme, contextUsage);
 		if (contextPart) metadataParts.push(contextPart);
 
@@ -634,7 +630,11 @@ export class TreeXWrapper {
 
 		if (info.toolName) metadataParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
 		if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));
-		if (entry.id === this.treeList.currentLeafId) metadataParts.push(theme.fg("accent", "CURRENT"));
+		if (entry.id === this.treeList.currentLeafId) {
+			metadataParts.push(theme.fg("accent", "CURRENT"));
+		} else if (currentDirection) {
+			metadataParts.push(theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT")));
+		}
 
 		const contentLines = this.getDetailContentLines(entry, info, width);
 		const bodyLines = getDetailBodyLines(contentLines, width, theme);

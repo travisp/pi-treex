@@ -294,28 +294,34 @@ test("native tree patch can be removed and reinstalled", () => {
 test("native tree patch wraps the real tree selector and renders without crashing", () => {
 	const { mode, selector, lines } = renderWrappedTree();
 	const wrapper = mode.child;
+	const detailHeader = findLine(lines, "DEPTH");
 
 	assert.notEqual(wrapper, selector);
 	assert.equal(mode.focus, wrapper);
 	assert.ok(lines[6].includes("depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
+	assert.ok(detailHeader?.trimEnd().endsWith("CURRENT"));
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
 });
 
 test("current row gets an accent marker when it is visible but not selected", () => {
 	const { lines } = renderWrappedTree({ initialSelectedId: "branch-6" });
 	const currentLine = findLine(lines, "selected branch message");
+	const detailHeader = findLine(lines, "DEPTH");
 
 	assert.ok(currentLine?.startsWith("◆ "));
 	assert.ok(currentLine?.includes("│     • user: selected branch message"));
 	assert.ok(lines.some((line) => line.includes("↑ CURRENT")));
+	assert.ok(detailHeader?.trimEnd().endsWith("↑ CURRENT"));
 });
 
 test("detail pane shows when current is below the selected row", () => {
 	const { lines } = renderWrappedTree({ initialSelectedId: "branch-4" });
+	const detailHeader = findLine(lines, "DEPTH");
 
 	assert.ok(lines.some((line) => line.includes("↓ CURRENT")));
+	assert.ok(detailHeader?.trimEnd().endsWith("↓ CURRENT"));
 });
 
 test("current row marker stays visible when its surrounding branch is folded", () => {
