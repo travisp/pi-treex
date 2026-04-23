@@ -339,6 +339,20 @@ test("current row marker stays visible when its surrounding branch is folded", (
 	assert.ok(currentLine?.includes("branch message 4"));
 });
 
+test("current row marker is hidden when search filters out the current row", () => {
+	const { mode } = renderWrappedTree({ initialSelectedId: "branch-4" });
+	const treeList = mode.child.treeList;
+
+	treeList.searchQuery = "branch message 4";
+	treeList.applyFilter();
+
+	const lines = mode.child.render(80);
+	const detailHeader = findLine(lines, "DEPTH");
+
+	assert.ok(!lines.some((line) => line.startsWith("◆ ")));
+	assert.ok(detailHeader?.trimEnd().endsWith("↓ CURRENT"));
+});
+
 test("tool result detail pane prioritizes result lines over the tool command", () => {
 	const { lines } = renderWrappedTree({
 		tree: createToolResultTree(),

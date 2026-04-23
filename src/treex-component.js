@@ -178,7 +178,11 @@ function markCurrentLine(treeList, lines) {
 	if (!treeList.currentLeafId) return lines;
 
 	const { startIndex, endIndex } = getVisibleWindow(treeList);
-	const currentIndex = treeList.findNearestVisibleIndex(treeList.currentLeafId);
+	let currentIndex = treeList.filteredNodes.findIndex((node) => node.node.entry.id === treeList.currentLeafId);
+	if (currentIndex === -1) {
+		if (treeList.foldedNodes.size === 0) return lines;
+		currentIndex = treeList.findNearestVisibleIndex(treeList.currentLeafId);
+	}
 	if (currentIndex < startIndex || currentIndex >= endIndex) return lines;
 
 	const theme = getTheme();
