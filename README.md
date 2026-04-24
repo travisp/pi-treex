@@ -31,7 +31,17 @@ Context usage mirrors pi's own footer behavior: after a trailing user message it
 
 ## Installation
 
-### npm (coming when I get around to it)
+### npm
+
+```bash
+pi install npm:pi-treex
+```
+
+To try it for one run without adding it to your settings:
+
+```bash
+pi -e npm:pi-treex
+```
 
 ### git
 

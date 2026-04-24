@@ -5,9 +5,23 @@
 	"type": "module",
 	"main": "./treex.js",
 	"files": ["treex.js", "src", "README.md", "LICENSE"],
-	"keywords": ["pi-package"],
+	"keywords": ["pi-package", "pi", "pi-extension", "tree", "treex"],
+	"author": "Travis Pew",
+	"license": "MIT",
+	"homepage": "https://github.com/travisp/pi-treex#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/travisp/pi-treex.git"
+	},
+	"bugs": {
+		"url": "https://github.com/travisp/pi-treex/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"pi": {
-		"extensions": ["./treex.js"]
+		"extensions": ["./treex.js"],
+		"image": "https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/after.png"
 	},
 	"scripts": {
 		"check": "biome check . && node --test",
