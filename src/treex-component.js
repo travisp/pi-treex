@@ -68,24 +68,28 @@ function safeJson(value, spacing = 0) {
 	}
 }
 
+function formatAgo(value, singular, plural = `${singular}S`) {
+	return `${value} ${value === 1 ? singular : plural} AGO`;
+}
+
 function formatRelativeTime(timestamp) {
 	const then = new Date(timestamp).getTime();
 	if (!Number.isFinite(then)) return "UNKNOWN TIME";
 
 	const diffMinutes = Math.floor(Math.max(0, Date.now() - then) / 60000);
 	if (diffMinutes < 1) return "JUST NOW";
-	if (diffMinutes < 60) return `${diffMinutes} MIN AGO`;
+	if (diffMinutes < 60) return formatAgo(diffMinutes, "MIN");
 
 	const diffHours = Math.floor(diffMinutes / 60);
-	if (diffHours < 24) return `${diffHours} HR AGO`;
+	if (diffHours < 24) return formatAgo(diffHours, "HR");
 
 	const diffDays = Math.floor(diffHours / 24);
-	if (diffDays < 30) return `${diffDays} DAY AGO`;
+	if (diffDays < 30) return formatAgo(diffDays, "DAY");
 
 	const diffMonths = Math.floor(diffDays / 30);
-	if (diffMonths < 12) return `${diffMonths} MO AGO`;
+	if (diffMonths < 12) return formatAgo(diffMonths, "MO");
 
-	return `${Math.floor(diffMonths / 12)} YR AGO`;
+	return formatAgo(Math.floor(diffMonths / 12), "YR");
 }
 
 function fitLine(line, width) {

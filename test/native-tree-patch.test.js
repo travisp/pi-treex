@@ -389,6 +389,31 @@ test("detail pane removes blank lines from wrapped text content", () => {
 	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));
 });
 
+test("detail pane pluralizes relative time metadata", () => {
+	const cases = [
+		{ ageMs: 3 * 60 * 1000, expected: "3 MINS AGO", unexpected: "3 MIN AGO" },
+		{ ageMs: 3 * 60 * 60 * 1000, expected: "3 HRS AGO", unexpected: "3 HR AGO" },
+		{ ageMs: 3 * 24 * 60 * 60 * 1000, expected: "3 DAYS AGO", unexpected: "3 DAY AGO" },
+		{ ageMs: 3 * 30 * 24 * 60 * 60 * 1000, expected: "3 MOS AGO", unexpected: "3 MO AGO" },
+		{ ageMs: 2 * 12 * 30 * 24 * 60 * 60 * 1000, expected: "2 YRS AGO", unexpected: "2 YR AGO" },
+	];
+
+	for (const { ageMs, expected, unexpected } of cases) {
+		const tree = [makeNode("recent-root", null, "recent message")];
+		tree[0].entry.timestamp = new Date(Date.now() - ageMs).toISOString();
+
+		const { lines } = renderWrappedTree({
+			tree,
+			leafId: "recent-root",
+			initialSelectedId: "recent-root",
+			filterMode: "all",
+		});
+
+		assert.ok(lines.some((line) => line.includes(expected)));
+		assert.ok(!lines.some((line) => line.includes(unexpected)));
+	}
+});
+
 test("detail pane can render user messages with native styling", () => {
 	const { lines } = renderWrappedTree({
 		tree: createAssistantDetailTree(),
