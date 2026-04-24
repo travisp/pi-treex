@@ -18,10 +18,20 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 ## Screenshots
 
-| Before | After |
-| --- | --- |
-| <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/before.png" alt="Built-in pi /tree view with deep indentation wasting most horizontal space" width="360" /> | <img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/after.png" alt="TreeX-enhanced /tree view with sticky-left indentation and a bottom detail pane" width="360" /> |
-| The built-in tree can spend most of the viewport on indentation, leaving the actual row content heavily truncated. | TreeX shifts the visible branch left and keeps the selected row readable in a persistent detail pane. |
+<table>
+  <tr>
+    <th width="50%">Before</th>
+    <th width="50%">After</th>
+  </tr>
+  <tr>
+    <td width="50%"><img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/before.png" alt="Built-in pi /tree view with deep indentation wasting most horizontal space" width="100%" /></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/travisp/pi-treex/main/screenshots/after.png" alt="TreeX-enhanced /tree view with sticky-left indentation and a bottom detail pane" width="100%" /></td>
+  </tr>
+  <tr>
+    <td>The built-in tree can spend most of the viewport on indentation, leaving the actual row content heavily truncated.</td>
+    <td>TreeX shifts the visible branch left and keeps the selected row readable in a persistent detail pane.</td>
+  </tr>
+</table>
 
 ## Detail View
 
