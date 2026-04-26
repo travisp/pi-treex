@@ -233,7 +233,9 @@ function patchTreeListRender(treeList) {
 	treeList.__treexStickyLeftPatched = true;
 
 	treeList.render = function renderStickyLeft(width) {
-		return markCurrentLine(this, renderWithStickyLeft(this, width, originalRender));
+		const lines = renderWithStickyLeft(this, width, originalRender);
+		lines.pop();
+		return markCurrentLine(this, lines);
 	};
 }
 
@@ -482,6 +484,31 @@ function getCurrentDirection(treeList) {
 	return currentFlatIndex < selectedFlatIndex ? "up" : "down";
 }
 
+function getTreeStatusParts(treeList, theme) {
+	const parts = [theme.fg("muted", `${treeList.selectedIndex + 1}/${treeList.filteredNodes.length}`)];
+
+	switch (treeList.filterMode) {
+		case "no-tools":
+			parts.push(theme.fg("muted", "no-tools"));
+			break;
+		case "user-only":
+			parts.push(theme.fg("muted", "user"));
+			break;
+		case "labeled-only":
+			parts.push(theme.fg("muted", "labeled"));
+			break;
+		case "all":
+			parts.push(theme.fg("muted", "all"));
+			break;
+	}
+
+	if (treeList.showLabelTimestamps) {
+		parts.push(theme.fg("muted", "+label time"));
+	}
+
+	return parts;
+}
+
 function getTreeSelector(result) {
 	if (typeof result?.focus?.getTreeList === "function") return result.focus;
 	if (typeof result?.component?.getTreeList === "function") return result.component;
@@ -629,7 +656,10 @@ export class TreeXWrapper {
 		const info = describeEntry(this.treeList, selected.node);
 		const contextUsage = getDetailContextUsage(this.mode.session, entry);
 		const currentDirection = getCurrentDirection(this.treeList);
-		const metadataParts = [theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`))];
+		const metadataParts = [
+			theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`)),
+			...getTreeStatusParts(this.treeList, theme),
+		];
 
 		const contextPart = formatDetailContextUsage(theme, contextUsage);
 		if (contextPart) metadataParts.push(contextPart);
@@ -660,6 +690,7 @@ export class TreeXWrapper {
 
 		this.updateVisibleRows();
 		const lines = [...this.selector.render(renderWidth)];
+		lines.splice(lines.length - 2, 1);
 		const { stickyLeftDepth } = getStickyLeftState(this.treeList);
 
 		if (stickyLeftDepth) {

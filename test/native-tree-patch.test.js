@@ -305,6 +305,18 @@ test("native tree patch wraps the real tree selector and renders without crashin
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
 });
 
+test("tree status is folded into the detail header", () => {
+	const { lines } = renderWrappedTree({ filterMode: "no-tools" });
+	const detailHeader = findLine(lines, "DEPTH");
+
+	const detailHeaderIndex = lines.findIndex((line) => line.includes("DEPTH"));
+
+	assert.match(detailHeader ?? "", /\d+\/\d+/);
+	assert.ok(detailHeader?.includes("no-tools"));
+	assert.ok(!lines.some((line) => line.includes("[no-tools]")));
+	assert.ok(lines[detailHeaderIndex - 1]?.includes("─"));
+});
+
 test("current row gets an accent marker when it is visible but not selected", () => {
 	const { lines } = renderWrappedTree({ initialSelectedId: "branch-6" });
 	const currentLine = findLine(lines, "selected branch message");
