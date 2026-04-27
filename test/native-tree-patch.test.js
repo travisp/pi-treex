@@ -301,7 +301,7 @@ test("native tree patch wraps the real tree selector and renders without crashin
 	assert.ok(lines[6].includes("depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
-	assert.ok(detailHeader?.trimEnd().endsWith("CURRENT"));
+	assert.match(detailHeader ?? "", /\d+\/\d+ · DEPTH \d+ · CURRENT\s+│\s+USER/);
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
 });
 
@@ -311,9 +311,8 @@ test("tree status is folded into the detail header", () => {
 
 	const detailHeaderIndex = lines.findIndex((line) => line.includes("DEPTH"));
 
-	assert.match(detailHeader ?? "", /\d+\/\d+/);
-	assert.ok(detailHeader?.includes("no-tools"));
-	assert.ok(!lines.some((line) => line.includes("[no-tools]")));
+	assert.match(detailHeader ?? "", /\d+\/\d+ · \[no-tools\] · DEPTH \d+/);
+	assert.ok(!lines.some((line) => line.trim().startsWith("(") && line.includes("[no-tools]")));
 	assert.ok(lines[detailHeaderIndex - 1]?.includes("─"));
 });
 
@@ -325,7 +324,7 @@ test("current row gets an accent marker when it is visible but not selected", ()
 	assert.ok(currentLine?.startsWith("◆ "));
 	assert.ok(currentLine?.includes("│     • user: selected branch message"));
 	assert.ok(lines.some((line) => line.includes("↑ CURRENT")));
-	assert.ok(detailHeader?.trimEnd().endsWith("↑ CURRENT"));
+	assert.match(detailHeader ?? "", /DEPTH \d+ · ↑ CURRENT\s+│/);
 });
 
 test("detail pane shows when current is below the selected row", () => {
@@ -333,7 +332,7 @@ test("detail pane shows when current is below the selected row", () => {
 	const detailHeader = findLine(lines, "DEPTH");
 
 	assert.ok(lines.some((line) => line.includes("↓ CURRENT")));
-	assert.ok(detailHeader?.trimEnd().endsWith("↓ CURRENT"));
+	assert.match(detailHeader ?? "", /DEPTH \d+ · ↓ CURRENT\s+│/);
 });
 
 test("current row marker stays visible when its surrounding branch is folded", () => {
@@ -362,7 +361,7 @@ test("current row marker is hidden when search filters out the current row", () 
 	const detailHeader = findLine(lines, "DEPTH");
 
 	assert.ok(!lines.some((line) => line.startsWith("◆ ")));
-	assert.ok(detailHeader?.trimEnd().endsWith("↓ CURRENT"));
+	assert.match(detailHeader ?? "", /DEPTH \d+ · ↓ CURRENT\s+│/);
 });
 
 test("tool result detail pane prioritizes result lines over the tool command", () => {

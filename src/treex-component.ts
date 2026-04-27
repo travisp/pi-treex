@@ -9,6 +9,14 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/p
 
 const DETAIL_BODY_LINES = 3;
 const CURRENT_ROW_MARKER = "◆";
+const METADATA_SEPARATOR = " · ";
+const METADATA_GROUP_SEPARATOR = "  │  ";
+const FILTER_LABELS = {
+	"no-tools": "[no-tools]",
+	"user-only": "[user]",
+	"labeled-only": "[labeled]",
+	all: "[all]",
+};
 const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
 const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
 
@@ -475,38 +483,38 @@ function formatDetailContextUsage(theme, contextUsage) {
 	return theme.fg("muted", display);
 }
 
-function getCurrentDirection(treeList) {
-	const selected = treeList.filteredNodes[treeList.selectedIndex];
-	if (!treeList.currentLeafId || !selected || selected.node.entry.id === treeList.currentLeafId) return null;
+function getCurrentDirection(treeList, selected) {
+	if (!treeList.currentLeafId || selected.node.entry.id === treeList.currentLeafId) return null;
 
 	const currentFlatIndex = treeList.flatNodes.findIndex((node) => node.node.entry.id === treeList.currentLeafId);
 	const selectedFlatIndex = treeList.flatNodes.findIndex((node) => node.node.entry.id === selected.node.entry.id);
 	return currentFlatIndex < selectedFlatIndex ? "up" : "down";
 }
 
-function getTreeStatusParts(treeList, theme) {
-	const parts = [theme.fg("muted", `${treeList.selectedIndex + 1}/${treeList.filteredNodes.length}`)];
-
-	switch (treeList.filterMode) {
-		case "no-tools":
-			parts.push(theme.fg("muted", "no-tools"));
-			break;
-		case "user-only":
-			parts.push(theme.fg("muted", "user"));
-			break;
-		case "labeled-only":
-			parts.push(theme.fg("muted", "labeled"));
-			break;
-		case "all":
-			parts.push(theme.fg("muted", "all"));
-			break;
+function getCurrentPositionPart(treeList, selected, theme) {
+	if (selected.node.entry.id === treeList.currentLeafId) {
+		return theme.fg("accent", "CURRENT");
 	}
+
+	const currentDirection = getCurrentDirection(treeList, selected);
+	if (!currentDirection) return null;
+
+	return theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT"));
+}
+
+function getTreeFilterParts(treeList, theme) {
+	const filterLabel = FILTER_LABELS[treeList.filterMode];
+	const labels = filterLabel ? [filterLabel] : [];
 
 	if (treeList.showLabelTimestamps) {
-		parts.push(theme.fg("muted", "+label time"));
+		labels.push("[+label time]");
 	}
 
-	return parts;
+	return labels.map((label) => theme.fg("muted", label));
+}
+
+function joinMetadataParts(theme, parts) {
+	return parts.filter(Boolean).join(theme.fg("muted", METADATA_SEPARATOR));
 }
 
 function getTreeSelector(result) {
@@ -655,30 +663,28 @@ export class TreeXWrapper {
 		const entry = selected.node.entry;
 		const info = describeEntry(this.treeList, selected.node);
 		const contextUsage = getDetailContextUsage(this.mode.session, entry);
-		const currentDirection = getCurrentDirection(this.treeList);
-		const metadataParts = [
+		const treeParts = [
+			theme.fg("muted", `${this.treeList.selectedIndex + 1}/${this.treeList.filteredNodes.length}`),
+			...getTreeFilterParts(this.treeList, theme),
 			theme.bold(theme.fg("accent", `DEPTH ${getDisplayDepth(this.treeList, selected)}`)),
-			...getTreeStatusParts(this.treeList, theme),
+			getCurrentPositionPart(this.treeList, selected, theme),
 		];
 
+		const entryParts = [theme.bold(info.kind), theme.fg("muted", formatRelativeTime(entry.timestamp))];
+		if (info.toolName) entryParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
+		if (selected.node.label) entryParts.push(theme.fg("warning", `[${selected.node.label}]`));
+
+		const metadataGroups = [joinMetadataParts(theme, treeParts), joinMetadataParts(theme, entryParts)];
 		const contextPart = formatDetailContextUsage(theme, contextUsage);
-		if (contextPart) metadataParts.push(contextPart);
-
-		metadataParts.push(theme.bold(info.kind), theme.fg("muted", formatRelativeTime(entry.timestamp)));
-
-		if (info.toolName) metadataParts.push(theme.fg("muted", String(info.toolName).toUpperCase()));
-		if (selected.node.label) metadataParts.push(theme.fg("warning", `[${selected.node.label}]`));
-		if (entry.id === this.treeList.currentLeafId) {
-			metadataParts.push(theme.fg("accent", "CURRENT"));
-		} else if (currentDirection) {
-			metadataParts.push(theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT")));
+		if (contextPart) {
+			metadataGroups.push(joinMetadataParts(theme, [theme.fg("muted", "CTX"), contextPart]));
 		}
 
 		const contentLines = this.getDetailContentLines(entry, info, width);
 		const bodyLines = getDetailBodyLines(contentLines, width, theme);
 
 		return [
-			fitLine(metadataParts.join(theme.fg("muted", " · ")), width),
+			fitLine(metadataGroups.join(theme.fg("muted", METADATA_GROUP_SEPARATOR)), width),
 			...bodyLines.map((line) => fitLine(line, width)),
 			fitLine(theme.fg("border", "─".repeat(width)), width),
 		];
