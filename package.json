@@ -1,10 +1,10 @@
 {
 	"name": "pi-treex",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
 	"type": "module",
 	"main": "./treex.ts",
-	"files": ["treex.ts", "src", "README.md", "LICENSE"],
+	"files": ["treex.ts", "src", "README.md", "CHANGELOG.md", "LICENSE"],
 	"keywords": ["pi-package", "pi", "pi-extension", "tree", "treex"],
 	"author": "Travis Pew",
 	"license": "MIT",
