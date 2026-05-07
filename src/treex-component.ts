@@ -4,8 +4,8 @@ import {
 	estimateTokens,
 	getLastAssistantUsage,
 	getLatestCompactionEntry,
-} from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
 const CURRENT_ROW_MARKER = "◆";
@@ -17,7 +17,7 @@ const FILTER_LABELS = {
 	"labeled-only": "[labeled]",
 	all: "[all]",
 };
-const THEME_KEY = Symbol.for("@mariozechner/pi-coding-agent:theme");
+const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
 
 function getTheme() {

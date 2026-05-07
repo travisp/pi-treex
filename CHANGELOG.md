@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 - 2026-05-07
+
+### Changed
+
+- Updated Pi package scope from `@mariozechner` to `@earendil-works` and tested with pi 0.74.0.
+
 ## 0.2.0 - 2026-04-27
 
 ### Changed
