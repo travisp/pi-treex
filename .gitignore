@@ -1,3 +1,4 @@
 node_modules/
 .pi-lens/
 .DS_Store
+.pi/
