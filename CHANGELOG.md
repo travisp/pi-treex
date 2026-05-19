@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added a `Ctrl+R` full-detail drawer for truncated tree detail previews, with scrolling controls and a collapse hint.
+- Added expanded rendering for user, assistant, tool result, bash execution, compaction, branch summary, and custom message details.
+- Added a truncation hint in the compact detail pane when more content is available in the full-detail drawer.
+
+### Changed
+
+- Refactored TreeX detail rendering into separate wrapper, expanded drawer, and content-renderer helpers.
+- Improved ANSI escape handling used by detail compaction, visible-text checks, and current-row marker placement.
+
+### Fixed
+
+- Fixed expanded detail layout so it calculates the tree/detail split to fit the terminal while keeping up to about a dozen tree rows visible.
+
 ## 0.3.0 - 2026-05-07
 
 ### Changed

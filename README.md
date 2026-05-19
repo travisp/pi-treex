@@ -35,9 +35,9 @@ This extension patches the /tree internals and could break if pi updates in an i
 
 ## Detail View
 
-The detail view shows the depth of the currently selected item, what type of item it is, how long ago it occurred, and context usage for that point in the conversation when it can be inferred. For a tool, it will display what the tool result was. For a user or assistant message, it will display as much of the message as it can.
+The detail view shows the depth of the currently selected item, what type of item it is, how long ago it occurred, and context usage for that point in the conversation when it can be inferred. For a tool, it will display what the tool result was. For a user or assistant message, it will display as much of the message as it can. When the preview is truncated, it shows an inline `Ctrl+R full` hint; press `Ctrl+R` to expand the detail drawer into a scrollable full-detail view.
 
-Context usage mirrors pi's own footer behavior: after a trailing user message it may be estimated from the last assistant usage, so it can differ slightly from the following assistant row's provider-reported value.
+Context usage calculation mirrors pi's own footer behavior: after a trailing user message it may be estimated from the last assistant usage, so it can differ slightly from the following assistant row's provider-reported value.
 
 ## Installation
 

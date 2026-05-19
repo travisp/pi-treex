@@ -5,9 +5,16 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { ToolExecutionComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
+import {
+	AssistantMessageComponent,
+	BashExecutionComponent,
+	BranchSummaryMessageComponent,
+	CompactionSummaryMessageComponent,
+	CustomMessageComponent,
+	ToolExecutionComponent,
+	UserMessageComponent,
+} from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/index.js";
 import { TreeSelectorComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tree-selector.js";
-import { UserMessageComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/user-message.js";
 import { installTreeXNativePatches } from "../src/treex-component.ts";
 import treexExtension from "../treex.ts";
 
@@ -193,6 +200,18 @@ function createToolResultTree() {
 	return [userRoot];
 }
 
+function createBashExecutionTree() {
+	const bash = makeMessageNode("bash-detail", "user-root", {
+		role: "bashExecution",
+		command: "npm test",
+		output: "line 1\nline 2",
+		exitCode: 0,
+		cancelled: false,
+	});
+	const userRoot = makeNode("user-root", null, "run tests", [bash]);
+	return [userRoot];
+}
+
 function createAssistantDetailTree() {
 	const assistant = makeMessageNode("assistant-detail", "user-root", {
 		role: "assistant",
@@ -222,10 +241,20 @@ function createAssistantDetailTree() {
 }
 
 function createNativeComponents({
+	assistantMessageComponent = AssistantMessageComponent,
+	bashExecutionComponent = BashExecutionComponent,
+	branchSummaryMessageComponent = BranchSummaryMessageComponent,
+	compactionSummaryMessageComponent = CompactionSummaryMessageComponent,
+	customMessageComponent = CustomMessageComponent,
 	toolExecutionComponent = ToolExecutionComponent,
 	userMessageComponent = UserMessageComponent,
 } = {}) {
 	return {
+		assistantMessageComponent,
+		bashExecutionComponent,
+		branchSummaryMessageComponent,
+		compactionSummaryMessageComponent,
+		customMessageComponent,
 		toolExecutionComponent,
 		userMessageComponent,
 	};
@@ -378,6 +407,23 @@ test("tool result detail pane prioritizes result lines over the tool command", (
 	assert.ok(lines.some((line) => line.includes("line 2")));
 });
 
+test("bash preview shows output without command/status chrome", () => {
+	const { lines, mode } = renderWrappedTree({
+		tree: createBashExecutionTree(),
+		leafId: "bash-detail",
+		initialSelectedId: "bash-detail",
+		filterMode: "all",
+	});
+
+	assert.ok(lines.some((line) => line.includes("line 1")));
+	assert.ok(lines.some((line) => line.includes("line 2")));
+	assert.ok(!lines.some((line) => line.includes("$ npm test")));
+
+	mode.child.handleInput("\x12");
+	const expandedLines = mode.child.render(80);
+	assert.ok(expandedLines.some((line) => line.includes("$ npm test")));
+});
+
 test("detail pane removes blank lines from wrapped text content", () => {
 	const { lines } = renderWrappedTree({
 		tree: createAssistantDetailTree(),
@@ -398,6 +444,70 @@ test("detail pane removes blank lines from wrapped text content", () => {
 	assert.ok(lines.some((line) => line.includes("Hello")));
 	assert.ok(lines.some((line) => line.includes("I am the assistant")));
 	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));
+});
+
+test("detail pane shows an inline review hint when content is truncated", () => {
+	const truncatedTree = [
+		makeMessageNode("long-assistant", null, {
+			role: "assistant",
+			content: [{ type: "text", text: "one\ntwo\nthree\nfour" }],
+			stopReason: "stop",
+		}),
+	];
+	const shortTree = [
+		makeMessageNode("short-assistant", null, {
+			role: "assistant",
+			content: [{ type: "text", text: "one\ntwo\nthree" }],
+			stopReason: "stop",
+		}),
+	];
+
+	const { lines: truncatedLines } = renderWrappedTree({
+		tree: truncatedTree,
+		leafId: "long-assistant",
+		initialSelectedId: "long-assistant",
+		filterMode: "all",
+	});
+	const { lines: shortLines } = renderWrappedTree({
+		tree: shortTree,
+		leafId: "short-assistant",
+		initialSelectedId: "short-assistant",
+		filterMode: "all",
+	});
+
+	assert.ok(truncatedLines.some((line) => line.includes("Ctrl+R full")));
+	assert.ok(!shortLines.some((line) => line.includes("Ctrl+R full")));
+});
+
+test("ctrl+r toggles a full detail drawer", () => {
+	const tree = [
+		makeMessageNode("long-assistant", null, {
+			role: "assistant",
+			content: [{ type: "text", text: "one\ntwo\nthree\nfour" }],
+			stopReason: "stop",
+		}),
+	];
+	const { mode } = renderWrappedTree({
+		tree,
+		leafId: "long-assistant",
+		initialSelectedId: "long-assistant",
+		filterMode: "all",
+	});
+
+	mode.child.handleInput("\x12");
+
+	assert.equal(mode.focus, mode.child);
+	assert.equal(mode.child.expandedDetail.expanded, true);
+	const expandedLines = mode.child.render(60);
+	assert.ok(expandedLines.some((line) => line.includes("FULL ASSISTANT MESSAGE")));
+	assert.ok(expandedLines.some((line) => line.includes("one")));
+	assert.ok(expandedLines.some((line) => line.includes("two")));
+	assert.ok(expandedLines.some((line) => line.includes("three")));
+	assert.ok(expandedLines.some((line) => line.includes("four")));
+	assert.ok(expandedLines.some((line) => line.includes("Esc/Ctrl+R collapse")));
+
+	mode.child.handleInput("\x1b");
+	assert.equal(mode.child.expandedDetail.expanded, false);
 });
 
 test("detail pane pluralizes relative time metadata", () => {
@@ -444,13 +554,12 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 	const realCliPath = join(distDir, "cli.js");
 	const symlinkCliPath = join(binDir, "pi");
 	const indexPath = join(distDir, "index.js");
-	const toolExecutionDir = join(distDir, "modes", "interactive", "components");
-	const toolExecutionPath = join(toolExecutionDir, "tool-execution.js");
-	const userMessagePath = join(toolExecutionDir, "user-message.js");
+	const componentsDir = join(distDir, "modes", "interactive", "components");
+	const componentsIndexPath = join(componentsDir, "index.js");
 
 	await mkdir(distDir, { recursive: true });
 	await mkdir(binDir, { recursive: true });
-	await mkdir(toolExecutionDir, { recursive: true });
+	await mkdir(componentsDir, { recursive: true });
 	await writeFile(join(tempDir, "package.json"), '{"type":"module"}\n');
 	await writeFile(realCliPath, "export {};\n");
 	await symlink("../dist/cli.js", symlinkCliPath);
@@ -460,8 +569,18 @@ test("treex entry patches the host pi InteractiveMode", async () => {
 			"\n",
 		),
 	);
-	await writeFile(toolExecutionPath, "export class ToolExecutionComponent {}\n");
-	await writeFile(userMessagePath, "export class UserMessageComponent {}\n");
+	await writeFile(
+		componentsIndexPath,
+		[
+			"export class AssistantMessageComponent {}",
+			"export class BashExecutionComponent {}",
+			"export class BranchSummaryMessageComponent {}",
+			"export class CompactionSummaryMessageComponent {}",
+			"export class CustomMessageComponent {}",
+			"export class ToolExecutionComponent {}",
+			"export class UserMessageComponent {}",
+		].join("\n"),
+	);
 
 	const originalArgv1 = process.argv[1];
 	process.argv[1] = symlinkCliPath;

@@ -13,15 +13,19 @@ function getHostModuleUrl(relativePath) {
 }
 
 export default async function treeXExtension(pi) {
-	const [{ InteractiveMode }, { ToolExecutionComponent }, { UserMessageComponent }] = await Promise.all([
+	const [{ InteractiveMode }, components] = await Promise.all([
 		import(getHostModuleUrl("index.js")),
-		import(getHostModuleUrl("modes/interactive/components/tool-execution.js")),
-		import(getHostModuleUrl("modes/interactive/components/user-message.js")),
+		import(getHostModuleUrl("modes/interactive/components/index.js")),
 	]);
 
 	const unpatch = installTreeXNativePatches(InteractiveMode, {
-		toolExecutionComponent: ToolExecutionComponent,
-		userMessageComponent: UserMessageComponent,
+		assistantMessageComponent: components.AssistantMessageComponent,
+		bashExecutionComponent: components.BashExecutionComponent,
+		branchSummaryMessageComponent: components.BranchSummaryMessageComponent,
+		compactionSummaryMessageComponent: components.CompactionSummaryMessageComponent,
+		customMessageComponent: components.CustomMessageComponent,
+		toolExecutionComponent: components.ToolExecutionComponent,
+		userMessageComponent: components.UserMessageComponent,
 	});
 
 	pi.on("session_shutdown", unpatch);

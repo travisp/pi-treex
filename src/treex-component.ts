@@ -5,12 +5,21 @@ import {
 	getLastAssistantUsage,
 	getLatestCompactionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
+const EXPANDED_DETAIL_CHROME_LINES = 4;
+const EXPANDED_DETAIL_MIN_BODY_LINES = 3;
+const EXPANDED_DETAIL_MIN_LINES = EXPANDED_DETAIL_CHROME_LINES + EXPANDED_DETAIL_MIN_BODY_LINES;
+const EXPANDED_DETAIL_PREFERRED_TREE_ROWS = 12;
+// Tree selector chrome after TreeX removes the native status/spacer line.
+const TREE_SELECTOR_CHROME_LINES = 8;
+const EXPANDED_DETAIL_COLLAPSE_HINT = "Esc/Ctrl+R collapse";
 const CURRENT_ROW_MARKER = "◆";
 const METADATA_SEPARATOR = " · ";
 const METADATA_GROUP_SEPARATOR = "  │  ";
+const REVIEW_DETAIL_KEY = Key.ctrl("r");
+const TRUNCATED_DETAIL_HINT = "… Ctrl+R full";
 const FILTER_LABELS = {
 	"no-tools": "[no-tools]",
 	"user-only": "[user]",
@@ -19,6 +28,10 @@ const FILTER_LABELS = {
 };
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
+const ESCAPE_CODE = 27;
+const BELL_CODE = 7;
+const TREE_STICKY_STATUS_LINE_INDEX = 6;
+const NATIVE_TREE_STATUS_LINE_FROM_END = 2;
 
 function getTheme() {
 	return globalThis[THEME_KEY];
@@ -31,49 +44,54 @@ function normalizeDetail(text) {
 		.trim();
 }
 
-function stripAnsi(text) {
-	let result = "";
+function isAnsiFinalByte(char) {
+	const code = char.charCodeAt(0);
+	return code >= 0x40 && code <= 0x7e;
+}
 
-	for (let index = 0; index < text.length; index++) {
-		if (text.charCodeAt(index) !== 27) {
-			result += text[index];
-			continue;
-		}
+function getAnsiSequenceLength(text, startIndex) {
+	if (text.charCodeAt(startIndex) !== ESCAPE_CODE) return 0;
 
-		if (text[index + 1] === "[") {
-			index += 2;
-			while (index < text.length && !/[A-Za-z]/.test(text[index])) {
-				index++;
-			}
-			continue;
+	const marker = text[startIndex + 1];
+	if (marker === "[") {
+		let index = startIndex + 2;
+		while (index < text.length && !isAnsiFinalByte(text[index])) {
+			index++;
 		}
-
-		if (text[index + 1] === "]") {
-			index += 2;
-			while (index < text.length) {
-				if (text[index] === "\u0007") break;
-				if (text.charCodeAt(index) === 27 && text[index + 1] === "\\") {
-					index++;
-					break;
-				}
-				index++;
-			}
-		}
+		return index < text.length ? index - startIndex + 1 : 0;
 	}
 
+	if (marker !== "]" && marker !== "_") return 0;
+
+	let index = startIndex + 2;
+	while (index < text.length) {
+		if (text.charCodeAt(index) === BELL_CODE) return index - startIndex + 1;
+		if (text.charCodeAt(index) === ESCAPE_CODE && text[index + 1] === "\\") return index - startIndex + 2;
+		index++;
+	}
+	return 0;
+}
+
+function stripAnsi(text) {
+	let result = "";
+	for (let index = 0; index < text.length; ) {
+		const ansiLength = getAnsiSequenceLength(text, index);
+		if (ansiLength) {
+			index += ansiLength;
+		} else {
+			result += text[index];
+			index++;
+		}
+	}
 	return result;
 }
 
 function hasVisibleText(line) {
-	return visibleWidth(stripAnsi(String(line ?? "")).trim()) > 0;
+	return visibleWidth(stripAnsi(line).trim()) > 0;
 }
 
-function safeJson(value, spacing = 0) {
-	try {
-		return JSON.stringify(value, null, spacing);
-	} catch {
-		return "[unserializable]";
-	}
+function stringifyJson(value, spacing = 0) {
+	return JSON.stringify(value, null, spacing) ?? "";
 }
 
 function formatAgo(value, singular, plural = `${singular}S`) {
@@ -101,8 +119,7 @@ function formatRelativeTime(timestamp) {
 }
 
 function fitLine(line, width) {
-	const truncated = truncateToWidth(line, width);
-	return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
+	return truncateToWidth(line, width, "...", true);
 }
 
 function getDisplayIndent(treeList, flatNode) {
@@ -167,17 +184,13 @@ function shiftGutters(gutters, stickyLeftShift) {
 }
 
 function getLeadingAnsiLength(line) {
-	let index = 0;
-
-	while (line.startsWith("\u001b[", index)) {
-		index += 2;
-		while (index < line.length && !/[A-Za-z]/.test(line[index])) {
-			index++;
-		}
-		index++;
+	let length = 0;
+	while (length < line.length) {
+		const ansiLength = getAnsiSequenceLength(line, length);
+		if (!ansiLength) break;
+		length += ansiLength;
 	}
-
-	return index;
+	return length;
 }
 
 function replaceCursorSlot(line, replacement) {
@@ -248,7 +261,7 @@ function patchTreeListRender(treeList) {
 }
 
 function formatToolCallVerbose(name, args) {
-	const json = safeJson(args, 2);
+	const json = stringifyJson(args, 2);
 	return json ? `${name}\n${json}` : name;
 }
 
@@ -368,7 +381,7 @@ function describeEntry(treeList, node) {
 		case "custom":
 			return {
 				kind: entry.customType ? `${entry.customType}`.toUpperCase() : "CUSTOM",
-				full: entry.data === undefined ? `[custom: ${entry.customType}]` : safeJson(entry.data, 2),
+				full: entry.data === undefined ? `[custom: ${entry.customType}]` : stringifyJson(entry.data, 2),
 			};
 
 		case "label":
@@ -391,7 +404,26 @@ function describeEntry(treeList, node) {
 	}
 }
 
-function getVisibleTreeRows(tui) {
+function getExpandedDetailLayout(tui) {
+	const availableRows = Math.max(1, tui.terminal.rows - TREE_SELECTOR_CHROME_LINES);
+	const treeRows = Math.min(
+		EXPANDED_DETAIL_PREFERRED_TREE_ROWS,
+		Math.max(1, availableRows - EXPANDED_DETAIL_MIN_LINES),
+	);
+	const detailBodyRows = Math.max(1, availableRows - treeRows - EXPANDED_DETAIL_CHROME_LINES);
+
+	return { treeRows, detailBodyRows };
+}
+
+function getExpandedDetailBodyLines(tui) {
+	return getExpandedDetailLayout(tui).detailBodyRows;
+}
+
+function getVisibleTreeRows(tui, detailExpanded) {
+	if (detailExpanded) {
+		return getExpandedDetailLayout(tui).treeRows;
+	}
+
 	return Math.max(5, Math.floor(tui.terminal.rows / 2) - (DETAIL_BODY_LINES + 2));
 }
 
@@ -543,13 +575,23 @@ function removeSharedPrefix(baseLines, lines) {
 	return lines.slice(index);
 }
 
+function appendTruncatedDetailHint(line, width, theme) {
+	const hintWidth = visibleWidth(TRUNCATED_DETAIL_HINT);
+	const hint = theme.fg("muted", TRUNCATED_DETAIL_HINT);
+
+	if (width <= hintWidth) {
+		return truncateToWidth(hint, width);
+	}
+
+	return truncateToWidth(line, Math.max(1, width - hintWidth), "") + hint;
+}
+
 function getDetailBodyLines(lines, width, theme) {
 	const bodyLines = lines.slice(0, DETAIL_BODY_LINES);
 
 	if (lines.length > DETAIL_BODY_LINES) {
 		const lastLineIndex = bodyLines.length - 1;
-		bodyLines[lastLineIndex] =
-			truncateToWidth(bodyLines[lastLineIndex], Math.max(1, width - 1), "") + theme.fg("muted", "…");
+		bodyLines[lastLineIndex] = appendTruncatedDetailHint(bodyLines[lastLineIndex], width, theme);
 	}
 
 	while (bodyLines.length < DETAIL_BODY_LINES) {
@@ -559,19 +601,287 @@ function getDetailBodyLines(lines, width, theme) {
 	return bodyLines;
 }
 
-export class TreeXWrapper {
+function formatFullDetailTitle(info) {
+	if (info.kind === "USER" || info.kind === "ASSISTANT") {
+		return `FULL ${info.kind} MESSAGE`;
+	}
+
+	const titleParts = [`FULL ${info.kind}`];
+	if (info.toolName) titleParts.push(String(info.toolName).toUpperCase());
+	return titleParts.join(" · ");
+}
+
+function renderCompactComponentLines(component, width) {
+	return compactDetailLines(component.render(width));
+}
+
+function renderPlainTextLines(text, width) {
+	return wrapTextWithAnsi(normalizeDetail(text) || "(no text)", width);
+}
+
+function renderCompactPlainTextLines(text, width) {
+	return compactDetailLines(renderPlainTextLines(text, width));
+}
+
+function removeNativeTreeStatusLine(lines) {
+	const result = [...lines];
+	result.splice(result.length - NATIVE_TREE_STATUS_LINE_FROM_END, 1);
+	return result;
+}
+
+class ExpandedDetailPane {
+	constructor(tui) {
+		this.tui = tui;
+		this.expanded = false;
+		this.scrollOffset = 0;
+	}
+
+	toggle() {
+		if (this.expanded) {
+			this.collapse();
+		} else {
+			this.expanded = true;
+			this.scrollOffset = 0;
+		}
+	}
+
+	collapse() {
+		this.expanded = false;
+		this.scrollOffset = 0;
+	}
+
+	handleInput(keyData) {
+		if (matchesKey(keyData, Key.escape) || matchesKey(keyData, Key.ctrl("c"))) {
+			this.collapse();
+			return;
+		}
+		if (matchesKey(keyData, Key.up)) {
+			this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+			return;
+		}
+		if (matchesKey(keyData, Key.down)) {
+			this.scrollOffset++;
+			return;
+		}
+		if (matchesKey(keyData, Key.pageUp) || matchesKey(keyData, Key.left)) {
+			this.scrollOffset = Math.max(0, this.scrollOffset - getExpandedDetailBodyLines(this.tui));
+			return;
+		}
+		if (matchesKey(keyData, Key.pageDown) || matchesKey(keyData, Key.right)) {
+			this.scrollOffset += getExpandedDetailBodyLines(this.tui);
+			return;
+		}
+		if (matchesKey(keyData, Key.home)) {
+			this.scrollOffset = 0;
+			return;
+		}
+		if (matchesKey(keyData, Key.end)) {
+			this.scrollOffset = Number.POSITIVE_INFINITY;
+		}
+	}
+
+	renderEmpty(theme, width) {
+		const bodyHeight = getExpandedDetailBodyLines(this.tui);
+
+		return [
+			fitLine(theme.fg("muted", "NO SELECTION"), width),
+			fitLine(theme.fg("border", "─".repeat(width)), width),
+			...Array.from({ length: bodyHeight }, () => fitLine("", width)),
+			fitLine(theme.fg("muted", EXPANDED_DETAIL_COLLAPSE_HINT), width),
+			fitLine(theme.fg("border", "─".repeat(width)), width),
+		];
+	}
+
+	render(theme, width, title, contentLines) {
+		const bodyHeight = getExpandedDetailBodyLines(this.tui);
+		const lines = contentLines.length ? contentLines : [theme.fg("muted", "(no text)")];
+		const maxOffset = Math.max(0, lines.length - bodyHeight);
+		this.scrollOffset = Math.min(Math.max(0, this.scrollOffset), maxOffset);
+
+		const visibleLines = lines.slice(this.scrollOffset, this.scrollOffset + bodyHeight);
+		while (visibleLines.length < bodyHeight) {
+			visibleLines.push("");
+		}
+
+		const firstVisibleLine = Math.min(lines.length, this.scrollOffset + 1);
+		const lastVisibleLine = Math.min(lines.length, this.scrollOffset + bodyHeight);
+		const percent = lines.length <= bodyHeight ? 100 : Math.round((lastVisibleLine / lines.length) * 100);
+		const footerParts = [
+			EXPANDED_DETAIL_COLLAPSE_HINT,
+			`${firstVisibleLine}-${lastVisibleLine}/${lines.length}`,
+			`${percent}%`,
+			"↑↓ scroll",
+			"←/→ page",
+			"Home/End",
+		];
+
+		return [
+			fitLine(theme.bold(title), width),
+			fitLine(theme.fg("border", "─".repeat(width)), width),
+			...visibleLines.map((line) => fitLine(line, width)),
+			fitLine(theme.fg("muted", footerParts.join(METADATA_SEPARATOR)), width),
+			fitLine(theme.fg("border", "─".repeat(width)), width),
+		];
+	}
+}
+
+class DetailContentRenderer {
+	constructor(mode, treeList, components) {
+		this.mode = mode;
+		this.treeList = treeList;
+		this.tui = mode.ui;
+		this.components = components;
+	}
+
+	createToolExecutionComponent(entry) {
+		const message = entry.message;
+		const toolCall = this.treeList.toolCallMap.get(message.toolCallId);
+		return new this.components.toolExecutionComponent(
+			message.toolName,
+			message.toolCallId,
+			toolCall?.arguments ?? {},
+			{ showImages: false },
+			this.mode.getRegisteredToolDefinition(message.toolName),
+			this.tui,
+			this.mode.sessionManager.getCwd(),
+		);
+	}
+
+	createUserMessageComponent(entry) {
+		const text = this.mode.getUserMessageText(entry.message);
+		return new this.components.userMessageComponent(text, this.mode.getMarkdownThemeWithSettings());
+	}
+
+	createAssistantMessageComponent(entry) {
+		return new this.components.assistantMessageComponent(
+			entry.message,
+			this.mode.hideThinkingBlock,
+			this.mode.getMarkdownThemeWithSettings(),
+			this.mode.hiddenThinkingLabel,
+		);
+	}
+
+	renderBashExecutionLines(entry, width) {
+		const message = entry.message;
+		const component = new this.components.bashExecutionComponent(message.command, this.tui, message.excludeFromContext);
+		if (message.output) {
+			component.appendOutput(message.output);
+		}
+		component.setExpanded(true);
+		component.setComplete(
+			message.exitCode,
+			message.cancelled,
+			message.truncated ? { truncated: true } : undefined,
+			message.fullOutputPath,
+		);
+		return component.render(width);
+	}
+
+	renderBashPreviewLines(entry, width) {
+		const message = entry.message;
+		const output = normalizeDetail(message.output);
+		const text = output || normalizeDetail(message.command) || "(no output)";
+		const theme = getTheme();
+		return compactDetailLines(wrapTextWithAnsi(theme.fg("muted", text), width));
+	}
+
+	renderExpandableEntryLines(Component, message, width) {
+		const component = new Component(message, this.mode.getMarkdownThemeWithSettings());
+		component.setExpanded(true);
+		return component.render(width);
+	}
+
+	renderCustomMessageLines(entry, width) {
+		const renderer = this.mode.session.extensionRunner?.getMessageRenderer?.(entry.customType);
+		const component = new this.components.customMessageComponent(
+			entry,
+			renderer,
+			this.mode.getMarkdownThemeWithSettings(),
+		);
+		component.setExpanded(true);
+		return component.render(width);
+	}
+
+	renderToolLines(entry, width, result) {
+		const component = this.createToolExecutionComponent(entry);
+		component.setExpanded(true);
+		if (result) {
+			component.updateResult(result);
+		}
+		return component.render(width);
+	}
+
+	renderToolResultPreviewLines(entry, width) {
+		const callLines = compactDetailLines(this.renderToolLines(entry, width));
+		const fullLines = compactDetailLines(this.renderToolLines(entry, width, entry.message));
+		const resultLines = removeSharedPrefix(callLines, fullLines);
+		return resultLines.length > 0 ? resultLines : fullLines;
+	}
+
+	renderPreview(entry, info, width) {
+		if (isToolResultEntry(entry)) {
+			return this.renderToolResultPreviewLines(entry, width);
+		}
+
+		if (entry.type === "message") {
+			switch (entry.message.role) {
+				case "user":
+					return renderCompactComponentLines(this.createUserMessageComponent(entry), width);
+				case "assistant":
+					return renderCompactComponentLines(this.createAssistantMessageComponent(entry), width);
+				case "bashExecution":
+					return this.renderBashPreviewLines(entry, width);
+			}
+		}
+
+		return renderCompactPlainTextLines(info.full, width);
+	}
+
+	renderExpanded(entry, info, width) {
+		if (isToolResultEntry(entry)) {
+			return this.renderToolLines(entry, width, entry.message);
+		}
+
+		if (entry.type === "message") {
+			switch (entry.message.role) {
+				case "user":
+					return this.createUserMessageComponent(entry).render(width);
+				case "assistant":
+					return this.createAssistantMessageComponent(entry).render(width);
+				case "bashExecution":
+					return this.renderBashExecutionLines(entry, width);
+			}
+		}
+
+		if (entry.type === "compaction") {
+			return this.renderExpandableEntryLines(this.components.compactionSummaryMessageComponent, entry, width);
+		}
+
+		if (entry.type === "branch_summary") {
+			return this.renderExpandableEntryLines(this.components.branchSummaryMessageComponent, entry, width);
+		}
+
+		if (entry.type === "custom_message") {
+			return this.renderCustomMessageLines(entry, width);
+		}
+
+		return renderPlainTextLines(info.full, width);
+	}
+}
+
+class TreeXWrapper {
 	constructor(selector, mode, nativeComponents) {
 		this.selector = selector;
 		this.treeList = selector.getTreeList();
 		this.mode = mode;
 		this.tui = mode.ui;
-		this.toolExecutionComponent = nativeComponents.toolExecutionComponent;
-		this.userMessageComponent = nativeComponents.userMessageComponent;
+		this.detailContent = new DetailContentRenderer(mode, this.treeList, nativeComponents);
+		this.expandedDetail = new ExpandedDetailPane(this.tui);
 		patchTreeListRender(this.treeList);
 	}
 
 	updateVisibleRows() {
-		this.treeList.maxVisibleLines = getVisibleTreeRows(this.tui);
+		this.treeList.maxVisibleLines = getVisibleTreeRows(this.tui, this.expandedDetail.expanded);
 	}
 
 	get focused() {
@@ -588,7 +898,16 @@ export class TreeXWrapper {
 
 	handleInput(keyData) {
 		this.updateVisibleRows();
-		this.selector.handleInput(keyData);
+
+		if (!this.selector.labelInput && matchesKey(keyData, REVIEW_DETAIL_KEY)) {
+			this.expandedDetail.toggle();
+		} else if (this.expandedDetail.expanded) {
+			this.expandedDetail.handleInput(keyData);
+		} else {
+			this.selector.handleInput(keyData);
+		}
+
+		this.updateVisibleRows();
 		this.tui.requestRender();
 	}
 
@@ -601,67 +920,12 @@ export class TreeXWrapper {
 		return fitLine(`  ${badge}`, width);
 	}
 
-	createToolExecutionComponent(entry) {
-		const message = entry.message;
-		const toolCall = this.treeList.toolCallMap.get(message.toolCallId);
-		return new this.toolExecutionComponent(
-			message.toolName,
-			message.toolCallId,
-			toolCall?.arguments ?? {},
-			{ showImages: false },
-			this.mode.getRegisteredToolDefinition(message.toolName),
-			this.mode.ui,
-			this.mode.sessionManager.getCwd(),
-		);
+	getSelectedNode() {
+		return this.treeList.filteredNodes[this.treeList.selectedIndex] ?? null;
 	}
 
-	renderUserMessageLines(entry, width) {
-		const text = this.mode.getUserMessageText(entry.message);
-		const component = new this.userMessageComponent(text, this.mode.getMarkdownThemeWithSettings());
-		return compactDetailLines(component.render(width));
-	}
-
-	renderToolLines(entry, width, result) {
-		const component = this.createToolExecutionComponent(entry);
-		component.setExpanded(true);
-		if (result) {
-			component.updateResult(result);
-		}
-		return compactDetailLines(component.render(width));
-	}
-
-	renderToolResultLines(entry, width) {
-		const callLines = this.renderToolLines(entry, width);
-		const fullLines = this.renderToolLines(entry, width, entry.message);
-		const resultLines = removeSharedPrefix(callLines, fullLines);
-		return resultLines.length > 0 ? resultLines : fullLines;
-	}
-
-	getDetailContentLines(entry, info, width) {
-		if (isToolResultEntry(entry)) {
-			return this.renderToolResultLines(entry, width);
-		}
-
-		if (entry.type === "message" && entry.message.role === "user") {
-			return this.renderUserMessageLines(entry, width);
-		}
-
-		return compactDetailLines(wrapTextWithAnsi(normalizeDetail(info.full) || "(no text)", width));
-	}
-
-	renderDetailPane(theme, width) {
-		const selected = this.treeList.filteredNodes[this.treeList.selectedIndex];
-
-		if (!selected) {
-			return [
-				fitLine(theme.fg("muted", "NO SELECTION"), width),
-				...Array.from({ length: DETAIL_BODY_LINES }, () => fitLine("", width)),
-				fitLine(theme.fg("border", "─".repeat(width)), width),
-			];
-		}
-
+	getDetailMetadata(theme, selected, info) {
 		const entry = selected.node.entry;
-		const info = describeEntry(this.treeList, selected.node);
 		const contextUsage = getDetailContextUsage(this.mode.session, entry);
 		const treeParts = [
 			theme.fg("muted", `${this.treeList.selectedIndex + 1}/${this.treeList.filteredNodes.length}`),
@@ -680,14 +944,45 @@ export class TreeXWrapper {
 			metadataGroups.push(joinMetadataParts(theme, [theme.fg("muted", "CTX"), contextPart]));
 		}
 
-		const contentLines = this.getDetailContentLines(entry, info, width);
-		const bodyLines = getDetailBodyLines(contentLines, width, theme);
+		return metadataGroups.join(theme.fg("muted", METADATA_GROUP_SEPARATOR));
+	}
+
+	renderDetailPane(theme, width) {
+		const selected = this.getSelectedNode();
+		if (!selected) {
+			return [
+				fitLine(theme.fg("muted", "NO SELECTION"), width),
+				...Array.from({ length: DETAIL_BODY_LINES }, () => fitLine("", width)),
+				fitLine(theme.fg("border", "─".repeat(width)), width),
+			];
+		}
+
+		const entry = selected.node.entry;
+		const info = describeEntry(this.treeList, selected.node);
+		const bodyLines = getDetailBodyLines(this.detailContent.renderPreview(entry, info, width), width, theme);
 
 		return [
-			fitLine(metadataGroups.join(theme.fg("muted", METADATA_GROUP_SEPARATOR)), width),
+			fitLine(this.getDetailMetadata(theme, selected, info), width),
 			...bodyLines.map((line) => fitLine(line, width)),
 			fitLine(theme.fg("border", "─".repeat(width)), width),
 		];
+	}
+
+	renderExpandedDetailPane(theme, width) {
+		const selected = this.getSelectedNode();
+		if (!selected) {
+			return this.expandedDetail.renderEmpty(theme, width);
+		}
+
+		const entry = selected.node.entry;
+		const info = describeEntry(this.treeList, selected.node);
+
+		return this.expandedDetail.render(
+			theme,
+			width,
+			formatFullDetailTitle(info),
+			this.detailContent.renderExpanded(entry, info, width),
+		);
 	}
 
 	render(width) {
@@ -695,15 +990,18 @@ export class TreeXWrapper {
 		const renderWidth = Math.max(20, width);
 
 		this.updateVisibleRows();
-		const lines = [...this.selector.render(renderWidth)];
-		lines.splice(lines.length - 2, 1);
+		const lines = removeNativeTreeStatusLine(this.selector.render(renderWidth));
 		const { stickyLeftDepth } = getStickyLeftState(this.treeList);
 
 		if (stickyLeftDepth) {
-			lines[6] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
+			lines[TREE_STICKY_STATUS_LINE_INDEX] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
 		}
 
-		return [...lines, ...this.renderDetailPane(theme, renderWidth)];
+		const detailLines = this.expandedDetail.expanded
+			? this.renderExpandedDetailPane(theme, renderWidth)
+			: this.renderDetailPane(theme, renderWidth);
+
+		return [...lines, ...detailLines];
 	}
 }
 
