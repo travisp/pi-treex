@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-19
+
 ### Added
 
 - Added a `Ctrl+R` full-detail drawer for truncated tree detail previews, with scrolling controls and a collapse hint.
@@ -15,6 +17,7 @@
 
 ### Fixed
 
+- Fixed custom entry string data in the TreeX detail pane rendering escaped newlines instead of human-readable multiline text.
 - Fixed expanded detail layout so it calculates the tree/detail split to fit the terminal while keeping up to about a dozen tree rows visible.
 
 ## 0.3.0 - 2026-05-07

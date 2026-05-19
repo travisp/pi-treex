@@ -94,6 +94,10 @@ function stringifyJson(value, spacing = 0) {
 	return JSON.stringify(value, null, spacing) ?? "";
 }
 
+function formatCustomEntryData(data) {
+	return typeof data === "string" ? normalizeDetail(data) : stringifyJson(data, 2);
+}
+
 function formatAgo(value, singular, plural = `${singular}S`) {
 	return `${value} ${value === 1 ? singular : plural} AGO`;
 }
@@ -381,7 +385,7 @@ function describeEntry(treeList, node) {
 		case "custom":
 			return {
 				kind: entry.customType ? `${entry.customType}`.toUpperCase() : "CUSTOM",
-				full: entry.data === undefined ? `[custom: ${entry.customType}]` : stringifyJson(entry.data, 2),
+				full: entry.data === undefined ? `[custom: ${entry.customType}]` : formatCustomEntryData(entry.data),
 			};
 
 		case "label":

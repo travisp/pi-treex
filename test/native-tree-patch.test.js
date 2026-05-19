@@ -446,6 +446,34 @@ test("detail pane removes blank lines from wrapped text content", () => {
 	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));
 });
 
+test("custom entry string data renders as human text", () => {
+	const tree = [
+		{
+			entry: {
+				id: "custom-human",
+				parentId: null,
+				timestamp: "2024-01-01T00:00:00.000Z",
+				type: "custom",
+				customType: "note",
+				data: "first line\nsecond line",
+			},
+			children: [],
+		},
+	];
+
+	const { lines } = renderWrappedTree({
+		tree,
+		leafId: "custom-human",
+		initialSelectedId: "custom-human",
+		filterMode: "all",
+	});
+
+	const rendered = lines.join("\n");
+	assert.match(rendered, /first line/);
+	assert.match(rendered, /second line/);
+	assert.doesNotMatch(rendered, /\\n/);
+});
+
 test("detail pane shows an inline review hint when content is truncated", () => {
 	const truncatedTree = [
 		makeMessageNode("long-assistant", null, {
