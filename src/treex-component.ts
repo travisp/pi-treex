@@ -8,12 +8,10 @@ import {
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
+const COMPACT_DETAIL_LINES = DETAIL_BODY_LINES + 2;
 const EXPANDED_DETAIL_CHROME_LINES = 4;
-const EXPANDED_DETAIL_MIN_BODY_LINES = 3;
-const EXPANDED_DETAIL_MIN_LINES = EXPANDED_DETAIL_CHROME_LINES + EXPANDED_DETAIL_MIN_BODY_LINES;
+const EXPANDED_DETAIL_MIN_LINES = EXPANDED_DETAIL_CHROME_LINES + DETAIL_BODY_LINES;
 const EXPANDED_DETAIL_PREFERRED_TREE_ROWS = 12;
-// Tree selector chrome after TreeX removes the native status/spacer line.
-const TREE_SELECTOR_CHROME_LINES = 8;
 const EXPANDED_DETAIL_COLLAPSE_HINT = "Esc/Ctrl+R collapse";
 const CURRENT_ROW_MARKER = "◆";
 const METADATA_SEPARATOR = " · ";
@@ -30,8 +28,6 @@ const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
 const ESCAPE_CODE = 27;
 const BELL_CODE = 7;
-const TREE_STICKY_STATUS_LINE_INDEX = 6;
-const NATIVE_TREE_STATUS_LINE_FROM_END = 2;
 
 function getTheme() {
 	return globalThis[THEME_KEY];
@@ -408,27 +404,31 @@ function describeEntry(treeList, node) {
 	}
 }
 
-function getExpandedDetailLayout(tui) {
-	const availableRows = Math.max(1, tui.terminal.rows - TREE_SELECTOR_CHROME_LINES);
-	const treeRows = Math.min(
-		EXPANDED_DETAIL_PREFERRED_TREE_ROWS,
-		Math.max(1, availableRows - EXPANDED_DETAIL_MIN_LINES),
-	);
-	const detailBodyRows = Math.max(1, availableRows - treeRows - EXPANDED_DETAIL_CHROME_LINES);
-
-	return { treeRows, detailBodyRows };
-}
-
-function getExpandedDetailBodyLines(tui) {
-	return getExpandedDetailLayout(tui).detailBodyRows;
-}
-
-function getVisibleTreeRows(tui, detailExpanded) {
+function calculateTreeDetailLayout(terminalRows, detailExpanded, selectorChromeLines) {
 	if (detailExpanded) {
-		return getExpandedDetailLayout(tui).treeRows;
+		const availableRows = Math.max(1, terminalRows - selectorChromeLines);
+		const treeRows = Math.min(
+			EXPANDED_DETAIL_PREFERRED_TREE_ROWS,
+			Math.max(1, availableRows - EXPANDED_DETAIL_MIN_LINES),
+		);
+		const detailBodyRows = Math.max(1, availableRows - treeRows - EXPANDED_DETAIL_CHROME_LINES);
+
+		return { treeRows, detailBodyRows };
 	}
 
-	return Math.max(5, Math.floor(tui.terminal.rows / 2) - (DETAIL_BODY_LINES + 2));
+	const preferredTreeRows = Math.max(5, Math.floor(terminalRows / 2) - COMPACT_DETAIL_LINES);
+	const availableTreeRows = Math.max(1, terminalRows - selectorChromeLines - COMPACT_DETAIL_LINES);
+	return {
+		treeRows: Math.min(preferredTreeRows, availableTreeRows),
+		detailBodyRows: DETAIL_BODY_LINES,
+	};
+}
+
+function getRenderedTreeLineCount(treeList) {
+	const { startIndex, endIndex } = getVisibleWindow(treeList);
+	// The native tree renders a single "No entries found" row when the window is empty.
+	if (startIndex === endIndex) return 1;
+	return endIndex - startIndex;
 }
 
 // Detail pane context helpers
@@ -438,7 +438,7 @@ function getDetailContextUsage(session, entry) {
 	const modelIdentity = sessionContext.model ?? findLastAssistantModel(branchEntries);
 	if (!modelIdentity) return null;
 
-	const contextWindow = session.modelRegistry.find(modelIdentity.provider, modelIdentity.modelId)?.contextWindow;
+	const contextWindow = session.modelRuntime.getModel(modelIdentity.provider, modelIdentity.modelId)?.contextWindow;
 	if (!contextWindow) return null;
 
 	const latestCompaction = getLatestCompactionEntry(branchEntries);
@@ -627,17 +627,17 @@ function renderCompactPlainTextLines(text, width) {
 	return compactDetailLines(renderPlainTextLines(text, width));
 }
 
-function removeNativeTreeStatusLine(lines) {
+function removeNativeTreeTrailingSpacer(lines) {
 	const result = [...lines];
-	result.splice(result.length - NATIVE_TREE_STATUS_LINE_FROM_END, 1);
+	result.splice(-2, 1);
 	return result;
 }
 
 class ExpandedDetailPane {
-	constructor(tui) {
-		this.tui = tui;
+	constructor() {
 		this.expanded = false;
 		this.scrollOffset = 0;
+		this.bodyHeight = DETAIL_BODY_LINES;
 	}
 
 	toggle() {
@@ -668,11 +668,11 @@ class ExpandedDetailPane {
 			return;
 		}
 		if (matchesKey(keyData, Key.pageUp) || matchesKey(keyData, Key.left)) {
-			this.scrollOffset = Math.max(0, this.scrollOffset - getExpandedDetailBodyLines(this.tui));
+			this.scrollOffset = Math.max(0, this.scrollOffset - this.bodyHeight);
 			return;
 		}
 		if (matchesKey(keyData, Key.pageDown) || matchesKey(keyData, Key.right)) {
-			this.scrollOffset += getExpandedDetailBodyLines(this.tui);
+			this.scrollOffset += this.bodyHeight;
 			return;
 		}
 		if (matchesKey(keyData, Key.home)) {
@@ -685,31 +685,28 @@ class ExpandedDetailPane {
 	}
 
 	renderEmpty(theme, width) {
-		const bodyHeight = getExpandedDetailBodyLines(this.tui);
-
 		return [
 			fitLine(theme.fg("muted", "NO SELECTION"), width),
 			fitLine(theme.fg("border", "─".repeat(width)), width),
-			...Array.from({ length: bodyHeight }, () => fitLine("", width)),
+			...Array.from({ length: this.bodyHeight }, () => fitLine("", width)),
 			fitLine(theme.fg("muted", EXPANDED_DETAIL_COLLAPSE_HINT), width),
 			fitLine(theme.fg("border", "─".repeat(width)), width),
 		];
 	}
 
 	render(theme, width, title, contentLines) {
-		const bodyHeight = getExpandedDetailBodyLines(this.tui);
 		const lines = contentLines.length ? contentLines : [theme.fg("muted", "(no text)")];
-		const maxOffset = Math.max(0, lines.length - bodyHeight);
+		const maxOffset = Math.max(0, lines.length - this.bodyHeight);
 		this.scrollOffset = Math.min(Math.max(0, this.scrollOffset), maxOffset);
 
-		const visibleLines = lines.slice(this.scrollOffset, this.scrollOffset + bodyHeight);
-		while (visibleLines.length < bodyHeight) {
+		const visibleLines = lines.slice(this.scrollOffset, this.scrollOffset + this.bodyHeight);
+		while (visibleLines.length < this.bodyHeight) {
 			visibleLines.push("");
 		}
 
 		const firstVisibleLine = Math.min(lines.length, this.scrollOffset + 1);
-		const lastVisibleLine = Math.min(lines.length, this.scrollOffset + bodyHeight);
-		const percent = lines.length <= bodyHeight ? 100 : Math.round((lastVisibleLine / lines.length) * 100);
+		const lastVisibleLine = Math.min(lines.length, this.scrollOffset + this.bodyHeight);
+		const percent = lines.length <= this.bodyHeight ? 100 : Math.round((lastVisibleLine / lines.length) * 100);
 		const footerParts = [
 			EXPANDED_DETAIL_COLLAPSE_HINT,
 			`${firstVisibleLine}-${lastVisibleLine}/${lines.length}`,
@@ -753,7 +750,11 @@ class DetailContentRenderer {
 
 	createUserMessageComponent(entry) {
 		const text = this.mode.getUserMessageText(entry.message);
-		return new this.components.userMessageComponent(text, this.mode.getMarkdownThemeWithSettings());
+		return new this.components.userMessageComponent(
+			text,
+			this.mode.getMarkdownThemeWithSettings(),
+			this.mode.outputPad,
+		);
 	}
 
 	createAssistantMessageComponent(entry) {
@@ -762,6 +763,7 @@ class DetailContentRenderer {
 			this.mode.hideThinkingBlock,
 			this.mode.getMarkdownThemeWithSettings(),
 			this.mode.hiddenThinkingLabel,
+			this.mode.outputPad,
 		);
 	}
 
@@ -880,12 +882,34 @@ class TreeXWrapper {
 		this.mode = mode;
 		this.tui = mode.ui;
 		this.detailContent = new DetailContentRenderer(mode, this.treeList, nativeComponents);
-		this.expandedDetail = new ExpandedDetailPane(this.tui);
+		this.expandedDetail = new ExpandedDetailPane();
 		patchTreeListRender(this.treeList);
 	}
 
-	updateVisibleRows() {
-		this.treeList.maxVisibleLines = getVisibleTreeRows(this.tui, this.expandedDetail.expanded);
+	renderSelector(width) {
+		const lines = removeNativeTreeTrailingSpacer(this.selector.render(width));
+		const treeLineCount = this.selector.labelInput ? 0 : getRenderedTreeLineCount(this.treeList);
+		return { lines, treeLineCount };
+	}
+
+	renderSelectorWithLayout(width) {
+		// Pi's tree help wraps based on terminal width. Measure its rendered chrome,
+		// then give the remaining rows to the tree and detail pane.
+		let rendered = this.renderSelector(width);
+		const selectorChromeLines = rendered.lines.length - rendered.treeLineCount;
+		const { treeRows, detailBodyRows } = calculateTreeDetailLayout(
+			this.tui.terminal.rows,
+			this.expandedDetail.expanded,
+			selectorChromeLines,
+		);
+
+		this.expandedDetail.bodyHeight = detailBodyRows;
+		if (this.treeList.maxVisibleLines !== treeRows) {
+			this.treeList.maxVisibleLines = treeRows;
+			rendered = this.renderSelector(width);
+		}
+
+		return rendered;
 	}
 
 	get focused() {
@@ -901,8 +925,6 @@ class TreeXWrapper {
 	}
 
 	handleInput(keyData) {
-		this.updateVisibleRows();
-
 		if (!this.selector.labelInput && matchesKey(keyData, REVIEW_DETAIL_KEY)) {
 			this.expandedDetail.toggle();
 		} else if (this.expandedDetail.expanded) {
@@ -911,7 +933,6 @@ class TreeXWrapper {
 			this.selector.handleInput(keyData);
 		}
 
-		this.updateVisibleRows();
 		this.tui.requestRender();
 	}
 
@@ -993,12 +1014,14 @@ class TreeXWrapper {
 		const theme = getTheme();
 		const renderWidth = Math.max(20, width);
 
-		this.updateVisibleRows();
-		const lines = removeNativeTreeStatusLine(this.selector.render(renderWidth));
+		const { lines, treeLineCount } = this.renderSelectorWithLayout(renderWidth);
 		const { stickyLeftDepth } = getStickyLeftState(this.treeList);
 
-		if (stickyLeftDepth) {
-			lines[TREE_STICKY_STATUS_LINE_INDEX] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
+		if (stickyLeftDepth && treeLineCount > 0) {
+			// The native bottom border remains after the tree rows. Replace the
+			// spacer immediately before those rows without assuming a chrome height.
+			const firstTreeLineIndex = lines.length - treeLineCount - 1;
+			lines[firstTreeLineIndex - 1] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
 		}
 
 		const detailLines = this.expandedDetail.expanded

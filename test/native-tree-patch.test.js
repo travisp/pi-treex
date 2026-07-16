@@ -267,7 +267,8 @@ function renderWrappedTree({
 	filterMode,
 	nativeComponents = createNativeComponents(),
 	theme = createTheme(),
-	modelRegistry = { find: () => undefined },
+	modelRuntime = { getModel: () => undefined },
+	outputPad = 1,
 } = {}) {
 	globalThis[THEME_KEY] = theme;
 
@@ -275,12 +276,13 @@ function renderWrappedTree({
 	installTreeXNativePatches(InteractiveMode, nativeComponents);
 
 	const mode = new InteractiveMode(24);
+	mode.outputPad = outputPad;
 	const entries = collectEntries(tree);
 	mode.sessionManager.getEntries = () => entries;
 	mode.sessionManager.getBranch = (entryId = leafId) => getBranchEntries(tree, entryId);
 	mode.session = {
 		sessionManager: mode.sessionManager,
-		modelRegistry,
+		modelRuntime,
 	};
 
 	const selector = new TreeSelectorComponent(
@@ -296,6 +298,17 @@ function renderWrappedTree({
 
 	mode.showSelector(() => ({ component: selector, focus: selector }));
 	return { mode, selector, lines: mode.child.render(80) };
+}
+
+function simulateWrappedTreeHelp(selector) {
+	const helpLines = ["extra help one", "extra help two", "extra help three", "extra help four"];
+	const renderNativeSelector = selector.render.bind(selector);
+	selector.render = (width) => {
+		const lines = renderNativeSelector(width);
+		lines.splice(4, 0, ...helpLines);
+		return lines;
+	};
+	return helpLines;
 }
 
 function findLine(lines, text) {
@@ -327,11 +340,35 @@ test("native tree patch wraps the real tree selector and renders without crashin
 
 	assert.notEqual(wrapper, selector);
 	assert.equal(mode.focus, wrapper);
-	assert.ok(lines[6].includes("depth 3"));
+	assert.ok(findLine(lines, "depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
 	assert.match(detailHeader ?? "", /\d+\/\d+ · DEPTH \d+ · CURRENT\s+│\s+USER/);
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
+});
+
+test("selector chrome is measured before placing the sticky-left status", () => {
+	const { mode, selector } = renderWrappedTree();
+	const wrappedHelpLines = simulateWrappedTreeHelp(selector);
+	const lines = mode.child.render(80);
+	const stickyStatusIndex = lines.findIndex((line) => line.includes("depth 3"));
+	const firstTreeRowIndex = lines.findIndex((line) => line.includes("branch message 2"));
+
+	for (const helpLine of wrappedHelpLines) {
+		assert.ok(lines.includes(helpLine));
+	}
+	assert.equal(stickyStatusIndex + 1, firstTreeRowIndex);
+	assert.ok(lines.some((line) => line.includes("Type to search:")));
+});
+
+test("expanded detail layout accounts for wrapped selector chrome", () => {
+	const { mode, selector } = renderWrappedTree();
+	simulateWrappedTreeHelp(selector);
+	mode.child.handleInput("\x12");
+	const lines = mode.child.render(80);
+
+	assert.equal(lines.length, mode.ui.terminal.rows);
+	assert.ok(lines.some((line) => line.includes("FULL USER MESSAGE")));
 });
 
 test("tree status is folded into the detail header", () => {
@@ -424,14 +461,14 @@ test("bash preview shows output without command/status chrome", () => {
 	assert.ok(expandedLines.some((line) => line.includes("$ npm test")));
 });
 
-test("detail pane removes blank lines from wrapped text content", () => {
+test("assistant detail uses ModelRuntime context and removes blank lines", () => {
 	const { lines } = renderWrappedTree({
 		tree: createAssistantDetailTree(),
 		leafId: "assistant-detail",
 		initialSelectedId: "assistant-detail",
 		filterMode: "all",
-		modelRegistry: {
-			find(provider, modelId) {
+		modelRuntime: {
+			getModel(provider, modelId) {
 				if (provider === "openai" && modelId === "gpt-test") {
 					return { contextWindow: 100000 };
 				}
@@ -561,6 +598,48 @@ test("detail pane pluralizes relative time metadata", () => {
 		assert.ok(lines.some((line) => line.includes(expected)));
 		assert.ok(!lines.some((line) => line.includes(unexpected)));
 	}
+});
+
+test("detail message components receive pi's configured output padding", () => {
+	const constructorOutputPads = [];
+	class TrackingUserMessageComponent {
+		constructor(_text, _theme, outputPad) {
+			constructorOutputPads.push(["user", outputPad]);
+		}
+
+		render() {
+			return ["tracked user message"];
+		}
+	}
+
+	class TrackingAssistantMessageComponent {
+		constructor(_message, _hideThinking, _theme, _hiddenThinkingLabel, outputPad) {
+			constructorOutputPads.push(["assistant", outputPad]);
+		}
+
+		render() {
+			return ["tracked assistant message"];
+		}
+	}
+
+	renderWrappedTree({
+		nativeComponents: createNativeComponents({ userMessageComponent: TrackingUserMessageComponent }),
+		outputPad: 3,
+	});
+	renderWrappedTree({
+		tree: createAssistantDetailTree(),
+		leafId: "assistant-detail",
+		initialSelectedId: "assistant-detail",
+		nativeComponents: createNativeComponents({
+			assistantMessageComponent: TrackingAssistantMessageComponent,
+		}),
+		outputPad: 3,
+	});
+
+	assert.deepEqual(constructorOutputPads, [
+		["user", 3],
+		["assistant", 3],
+	]);
 });
 
 test("detail pane can render user messages with native styling", () => {

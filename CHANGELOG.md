@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-16
+
+### Changed
+
+- Measured Pi's rendered tree selector chrome so wrapped help text and terminal width changes no longer displace TreeX layout.
+- Applied Pi's configured output padding to user and assistant message details.
+
+### Fixed
+
+- Fixed `/tree` crashing on Pi 0.80.8 and newer after Pi replaced its internal model registry with `ModelRuntime`.
+- Fixed the sticky-left depth badge overwriting native tree help, search, or border lines on narrow terminals.
+- Fixed the expanded detail drawer exceeding the terminal height when native tree help wraps onto multiple lines.
+
 ## 0.4.0 - 2026-05-19
 
 ### Added
