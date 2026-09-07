@@ -1,20 +1,9 @@
-import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import * as host from "@earendil-works/pi-coding-agent";
 
 import { installTreeXNativePatches } from "./src/treex-component.js";
 
-function getHostDistDir() {
-	return dirname(realpathSync(process.argv[1]));
-}
-
-function getHostModuleUrl(relativePath) {
-	return pathToFileURL(resolve(getHostDistDir(), relativePath)).href;
-}
-
-export default async function treeXExtension(pi) {
-	const host = await import(getHostModuleUrl("index.js"));
-
+export default function treeXExtension(pi) {
+	// Pi's loader supplies the active runtime, including in standalone binaries.
 	const unpatch = installTreeXNativePatches(host.InteractiveMode, {
 		assistantMessageComponent: host.AssistantMessageComponent,
 		bashExecutionComponent: host.BashExecutionComponent,

@@ -74,11 +74,20 @@ After installation, use:
 ```bash
 npm run check   # lint + style check + tests
 npm run format  # format files
-npm test        # run the integration test
+npm test        # run the integration tests
 ```
+
+### Manual release checks
+
+Repeat on both the npm Node CLI and the standalone Pi executable, loading this checkout with `pi -ne -e ./treex.ts`:
+
+1. Open `/tree` in a session containing user and assistant messages; verify the detail previews.
+2. Press `Ctrl+R` to expand a long message, scroll, and collapse it.
+3. Close the tree, run `/reload`, and verify the tree and expanded details still work.
 
 ## Notes
 
-- Tested with pi 0.84.3
+- Tested with pi 0.85.1 using both the npm Node CLI and the standalone Bun executable.
+- Native classes are imported through Pi's extension loader, so TreeX does not depend on the executable's filesystem layout.
 - TreeX patches the native `/tree` path, so built-in slash command and tree hotkey keep using pi's own navigation and summary flow.
 - TreeX relies on private interactive-mode internals, so upstream pi changes may require TreeX updates.

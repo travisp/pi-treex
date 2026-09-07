@@ -1,6 +1,6 @@
 {
 	"name": "pi-treex",
-	"version": "0.4.3",
+	"version": "0.4.4",
 	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
 	"type": "module",
 	"main": "./treex.ts",
@@ -34,8 +34,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
-		"@earendil-works/pi-coding-agent": "0.74.0",
-		"@earendil-works/pi-tui": "0.74.0",
+		"@earendil-works/pi-coding-agent": "0.85.1",
+		"@earendil-works/pi-tui": "0.85.1",
 		"tsx": "^4.21.0"
 	}
 }

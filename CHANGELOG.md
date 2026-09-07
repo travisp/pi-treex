@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-09-07
+
+### Fixed
+
+- Fixed startup with standalone Bun-compiled Pi executables by importing native classes through Pi's extension loader instead of resolving the executable's virtual filesystem path.
+
+### Development
+
+- Updated test dependencies to Pi 0.85.1, added a regression test for the public runtime imports, and documented manual release checks for Node and standalone runtimes.
+
 ## 0.4.3 - 2026-08-26
 
 ### Fixed
