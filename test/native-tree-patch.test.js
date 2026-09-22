@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { InteractiveMode } from "@earendil-works/pi-coding-agent";
+import { pathToFileURL } from "node:url";
 
 import {
 	AssistantMessageComponent,
@@ -663,29 +666,67 @@ test("detail pane can render user messages with native styling", () => {
 	assert.ok(lines.some((line) => line.includes("say hello")));
 });
 
-test("treex patches the public runtime with a Bun virtual executable path", (t) => {
+test("treex entry patches the host pi InteractiveMode", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-treex-host-"));
+	const distDir = join(tempDir, "dist");
+	const binDir = join(tempDir, "bin");
+	const realCliPath = join(distDir, "cli.js");
+	const symlinkCliPath = join(binDir, "pi");
+	const indexPath = join(distDir, "index.js");
+	const componentsDir = join(distDir, "modes", "interactive", "components");
+	const componentsIndexPath = join(componentsDir, "index.js");
+
+	await mkdir(distDir, { recursive: true });
+	await mkdir(binDir, { recursive: true });
+	await mkdir(componentsDir, { recursive: true });
+	await writeFile(join(tempDir, "package.json"), '{"type":"module"}\n');
+	await writeFile(realCliPath, "export {};\n");
+	await symlink("../dist/cli.js", symlinkCliPath);
+	await writeFile(
+		indexPath,
+		["export class InteractiveMode {", "  showSelector(create) {", "    return create(() => {});", "  }", "}"].join(
+			"\n",
+		),
+	);
+	await writeFile(
+		componentsIndexPath,
+		[
+			"export class AssistantMessageComponent {}",
+			"export class BashExecutionComponent {}",
+			"export class BranchSummaryMessageComponent {}",
+			"export class CompactionSummaryMessageComponent {}",
+			"export class CustomMessageComponent {}",
+			"export class ToolExecutionComponent {}",
+			"export class UserMessageComponent {}",
+		].join("\n"),
+	);
+
 	const originalArgv1 = process.argv[1];
-	const before = InteractiveMode.prototype.showSelector;
-	t.after(() => {
+	process.argv[1] = symlinkCliPath;
+
+	try {
+		const hostModule = await import(pathToFileURL(indexPath).href);
+		const before = hostModule.InteractiveMode.prototype.showSelector;
+		const handlers = new Map();
+
+		await treexExtension({
+			on(event, handler) {
+				handlers.set(event, handler);
+			},
+		});
+		assert.notEqual(hostModule.InteractiveMode.prototype.showSelector, before);
+
+		assert.ok(handlers.has("session_shutdown"));
+		await handlers.get("session_shutdown")();
+		assert.equal(hostModule.InteractiveMode.prototype.showSelector, before);
+
+		await treexExtension({
+			on(event, handler) {
+				handlers.set(event, handler);
+			},
+		});
+		assert.notEqual(hostModule.InteractiveMode.prototype.showSelector, before);
+	} finally {
 		process.argv[1] = originalArgv1;
-	});
-	process.argv[1] = "/$bunfs/root/pi";
-
-	let shutdown;
-	const pi = {
-		on(event, handler) {
-			assert.equal(event, "session_shutdown");
-			shutdown = handler;
-			t.after(handler);
-		},
-	};
-
-	treexExtension(pi);
-	assert.notEqual(InteractiveMode.prototype.showSelector, before);
-
-	shutdown();
-	assert.equal(InteractiveMode.prototype.showSelector, before);
-
-	treexExtension(pi);
-	assert.notEqual(InteractiveMode.prototype.showSelector, before);
+	}
 });
