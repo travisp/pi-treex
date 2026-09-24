@@ -1,4 +1,5 @@
 node_modules/
+.devbox/
 .pi-lens/
 .DS_Store
 .pi/

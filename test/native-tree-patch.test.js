@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InteractiveMode } from "@earendil-works/pi-coding-agent";
+import { InteractiveMode, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 import {
 	AssistantMessageComponent,
@@ -490,6 +490,180 @@ test("assistant detail uses ModelRuntime context and removes blank lines", () =>
 	assert.ok(lines.some((line) => line.includes("Hello")));
 	assert.ok(lines.some((line) => line.includes("I am the assistant")));
 	assert.ok(lines.some((line) => line.includes("And I'm here to help you")));
+});
+
+function appendEntry(parent, entry) {
+	const node = {
+		entry: { parentId: parent.entry.id, timestamp: parent.entry.timestamp, ...entry },
+		children: [],
+	};
+	parent.children.push(node);
+	return node;
+}
+
+function renderContextTree(tree, selectedId) {
+	return renderWrappedTree({
+		tree,
+		leafId: selectedId,
+		filterMode: "all",
+		modelRuntime: { getModel: () => ({ contextWindow: 100000 }) },
+	});
+}
+
+for (const replacement of [null, { content: "short replacement" }]) {
+	test(`context ${replacement === null ? "omission" : "replacement"} invalidates earlier usage at the selected row`, () => {
+		const tree = createAssistantDetailTree();
+		tree[0].entry.message.content = "x".repeat(40000);
+		const assistant = tree[0].children[0];
+		const edit = appendEntry(assistant, {
+			id: "context-edit",
+			type: "context_edit",
+			targetId: "user-root",
+			replacement,
+		});
+		const expectedTokens =
+			estimateTokens(assistant.entry.message) +
+			(replacement ? estimateTokens({ role: "user", content: replacement.content }) : 0);
+		const { lines, mode } = renderContextTree(tree, edit.entry.id);
+		assert.ok(findLine(lines, `${(expectedTokens / 1000).toFixed(1)}%/100k`));
+		assert.ok(findLine(lines, "CONTEXT EDIT"));
+		assert.ok(findLine(lines, `${replacement ? "Replace in" : "Omit from"} model context: user-root`));
+		if (replacement) assert.ok(findLine(lines, replacement.content));
+
+		mode.child.handleInput("\x12");
+		const expanded = mode.child.render(80);
+		assert.ok(findLine(expanded, "FULL CONTEXT EDIT"));
+		if (replacement) assert.ok(findLine(expanded, replacement.content));
+
+		// Later edits must not affect the estimate at an earlier selection.
+		assert.ok(findLine(renderContextTree(tree, assistant.entry.id).lines, "12.3%/100k"));
+
+		const response = appendEntry(edit, {
+			id: "fresh-assistant",
+			type: "message",
+			message: {
+				...assistant.entry.message,
+				usage: { ...assistant.entry.message.usage, input: 2000, output: 0, totalTokens: 2000 },
+			},
+		});
+		assert.ok(findLine(renderContextTree(tree, response.entry.id).lines, "2.0%/100k"));
+	});
+}
+
+test("context is estimated when the only assistant is omitted", () => {
+	const tree = createAssistantDetailTree();
+	tree[0].entry.message.content = "x".repeat(8000);
+	const edit = appendEntry(tree[0].children[0], {
+		id: "omit-only-assistant",
+		type: "context_edit",
+		targetId: "assistant-detail",
+		replacement: null,
+	});
+	assert.ok(findLine(renderContextTree(tree, edit.entry.id).lines, "2.0%/100k"));
+});
+
+test("context estimates resolve system deltas after edits", () => {
+	const tree = createAssistantDetailTree();
+	const assistant = tree[0].children[0];
+	const system = appendEntry(assistant, {
+		id: "system-initial",
+		type: "message",
+		message: { role: "system", content: "", sections: { guidance: "x".repeat(40000) }, timestamp: 0 },
+	});
+	const delta = appendEntry(system, {
+		id: "system-delta",
+		type: "message",
+		message: { role: "system", content: "", sections: { guidance: "short guidance" }, timestamp: 0 },
+	});
+	const edit = appendEntry(delta, {
+		id: "edit-with-system",
+		type: "context_edit",
+		targetId: "user-root",
+		replacement: null,
+	});
+	const tokens = estimateTokens(assistant.entry.message) + estimateTokens(delta.entry.message);
+	assert.ok(findLine(renderContextTree(tree, edit.entry.id).lines, `${(tokens / 1000).toFixed(1)}%/100k`));
+});
+
+test("zero-usage responses after edits do not hide the projected estimate", () => {
+	const tree = createAssistantDetailTree();
+	const assistant = tree[0].children[0];
+	const edit = appendEntry(assistant, {
+		id: "large-edit",
+		type: "context_edit",
+		targetId: "user-root",
+		replacement: { content: "x".repeat(8000) },
+	});
+	const response = appendEntry(edit, {
+		id: "zero-usage",
+		type: "message",
+		message: {
+			...assistant.entry.message,
+			usage: { ...assistant.entry.message.usage, input: 0, output: 0, totalTokens: 0 },
+		},
+	});
+	const tokens = 2000 + 2 * estimateTokens(assistant.entry.message);
+	assert.ok(findLine(renderContextTree(tree, response.entry.id).lines, `${(tokens / 1000).toFixed(1)}%/100k`));
+});
+
+test("edits on sibling branches do not affect the selected branch", () => {
+	const tree = createAssistantDetailTree();
+	const assistant = tree[0].children[0];
+	appendEntry(assistant, {
+		id: "sibling-edit",
+		type: "context_edit",
+		targetId: "user-root",
+		replacement: null,
+	});
+	const sibling = appendEntry(assistant, {
+		id: "sibling-user",
+		type: "message",
+		message: { role: "user", content: "x".repeat(4000) },
+	});
+	assert.ok(findLine(renderContextTree(tree, sibling.entry.id).lines, "13.3%/100k"));
+});
+
+test("context replacement drawer shows full structured content", () => {
+	const tree = createAssistantDetailTree();
+	const edit = appendEntry(tree[0].children[0], {
+		id: "structured-edit",
+		type: "context_edit",
+		targetId: "user-root",
+		replacement: { content: [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }] },
+	});
+	const { mode, lines } = renderContextTree(tree, edit.entry.id);
+	assert.ok(findLine(lines, "Ctrl+R full"));
+	mode.child.handleInput("\x12");
+	const expanded = mode.child.render(80);
+	assert.ok(findLine(expanded, "FULL CONTEXT EDIT"));
+	mode.child.handleInput("\x1b[F");
+	assert.ok(findLine(mode.child.render(80), "five"));
+});
+
+test("post-compaction usage must survive projection", () => {
+	const tree = createAssistantDetailTree();
+	const assistant = tree[0].children[0];
+	const compaction = appendEntry(assistant, {
+		id: "compaction",
+		type: "compaction",
+		summary: "Summary",
+		firstKeptEntryId: assistant.entry.id,
+		tokensBefore: 12345,
+	});
+	assert.ok(findLine(renderContextTree(tree, compaction.entry.id).lines, "?/100k"));
+	const response = appendEntry(compaction, {
+		id: "post-compaction",
+		type: "message",
+		message: assistant.entry.message,
+	});
+	assert.ok(findLine(renderContextTree(tree, response.entry.id).lines, "12.3%/100k"));
+	const edit = appendEntry(response, {
+		id: "omit-response",
+		type: "context_edit",
+		targetId: response.entry.id,
+		replacement: null,
+	});
+	assert.ok(findLine(renderContextTree(tree, edit.entry.id).lines, "?/100k"));
 });
 
 test("custom entry string data renders as human text", () => {

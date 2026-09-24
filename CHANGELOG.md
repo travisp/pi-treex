@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- Added context-edit details showing omission targets and replacement content, including full replacement text in the expanded drawer.
+
+### Fixed
+
+- Updated context usage estimates for Pi 0.87.1 to account for edits at the selected entry, resolve system-message deltas, and only trust post-compaction usage that survives in model context.
+
+### Development
+
+- Updated Pi development dependencies to 0.87.1 and added context-edit regression tests.
+- Added a Devbox environment for development checks.
+
 ## 0.4.4 - 2026-09-07
 
 ### Fixed

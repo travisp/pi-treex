@@ -1,0 +1,8 @@
+{
+	"packages": ["nodejs@24"],
+	"shell": {
+		"scripts": {
+			"check": "npm run check"
+		}
+	}
+}

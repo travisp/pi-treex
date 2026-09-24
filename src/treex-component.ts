@@ -1,10 +1,5 @@
-import {
-	buildSessionContext,
-	calculateContextTokens,
-	estimateTokens,
-	getLastAssistantUsage,
-	getLatestCompactionEntry,
-} from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
+import { buildSessionProjection, calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
@@ -382,6 +377,18 @@ function describeEntry(treeList, node) {
 				full: `[thinking: ${entry.thinkingLevel}]`,
 			};
 
+		case "context_edit": {
+			if (entry.replacement === null) {
+				return { kind: "CONTEXT EDIT", full: `Omit from model context: ${entry.targetId}` };
+			}
+
+			const content = extractDetailContent(treeList, entry.replacement.content, {
+				includeToolCalls: true,
+				verboseToolCalls: true,
+			});
+			return { kind: "CONTEXT EDIT", full: `Replace in model context: ${entry.targetId}\n\n${content}` };
+		}
+
 		case "custom":
 			return {
 				kind: entry.customType ? `${entry.customType}`.toUpperCase() : "CUSTOM",
@@ -438,24 +445,16 @@ function getRenderedTreeLineCount(treeList) {
 // Detail pane context helpers
 function getDetailContextUsage(session, entry) {
 	const branchEntries = session.sessionManager.getBranch(entry.id);
-	const sessionContext = buildSessionContext(session.sessionManager.getEntries(), entry.id);
-	const modelIdentity = sessionContext.model ?? findLastAssistantModel(branchEntries);
+	const projection = buildSessionProjection(session.sessionManager.getEntries(), entry.id);
+	const modelIdentity = projection.model ?? findLastAssistantModel(branchEntries);
 	if (!modelIdentity) return null;
 
 	const contextWindow = session.modelRuntime.getModel(modelIdentity.provider, modelIdentity.modelId)?.contextWindow;
 	if (!contextWindow) return null;
 
-	const latestCompaction = getLatestCompactionEntry(branchEntries);
-	if (latestCompaction) {
-		const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-		const usage = getLastAssistantUsage(branchEntries.slice(compactionIndex + 1));
-		if (!usage || calculateContextTokens(usage) === 0) {
-			return { percent: null, contextWindow };
-		}
-	}
-
+	const tokens = getProjectedContextTokens(projection, branchEntries);
 	return {
-		percent: (estimateContextTokensFromMessages(sessionContext.messages) / contextWindow) * 100,
+		percent: tokens === null ? null : (tokens / contextWindow) * 100,
 		contextWindow,
 	};
 }
@@ -474,25 +473,52 @@ function findLastAssistantModel(branchEntries) {
 	return null;
 }
 
-function estimateContextTokensFromMessages(messages) {
-	for (let index = messages.length - 1; index >= 0; index--) {
-		const message = messages[index];
-		if (message.role !== "assistant") continue;
-		if (message.stopReason === "aborted" || message.stopReason === "error" || !message.usage) continue;
+function isUsableAssistant(message) {
+	return (
+		message.role === "assistant" &&
+		message.stopReason !== "aborted" &&
+		message.stopReason !== "error" &&
+		message.usage &&
+		calculateContextTokens(message.usage) > 0
+	);
+}
 
-		let trailingTokens = 0;
-		for (let trailingIndex = index + 1; trailingIndex < messages.length; trailingIndex++) {
-			trailingTokens += estimateTokens(messages[trailingIndex]);
+function getProjectedContextTokens(projection, branchEntries) {
+	let usageEntryId = null;
+	let tokens = 0;
+	// Only projected messages count: an omitted assistant cannot supply usage.
+	for (const { sourceEntry, messages } of projection.entries) {
+		for (const message of messages) {
+			if (isUsableAssistant(message)) {
+				usageEntryId = sourceEntry.id;
+				tokens = calculateContextTokens(message.usage);
+			} else {
+				tokens += estimateTokens(message);
+			}
 		}
-
-		return calculateContextTokens(message.usage) + trailingTokens;
 	}
 
-	let estimatedTokens = 0;
+	const usageIndex = branchEntries.findIndex((entry) => entry.id === usageEntryId);
+	const compactionIndex = branchEntries.findLastIndex((entry) => entry.type === "compaction");
+	// Match Pi's footer: compaction leaves usage unknown until a surviving response.
+	if (compactionIndex > usageIndex) return null;
+
+	const editIndex = branchEntries.findLastIndex((entry) => entry.type === "context_edit");
+	if (usageIndex > editIndex) return tokens;
+
+	// No usable response, or an edit changed context after its usage was recorded.
+	return estimateProjectionMessages(projection.messages);
+}
+
+function estimateProjectionMessages(messages) {
+	// System entries are deltas; estimate their resolved state rather than counting
+	// superseded sections and tool definitions multiple times.
+	const system = getCurrentSystemMessage(messages);
+	let tokens = system ? estimateTokens(system) : 0;
 	for (const message of messages) {
-		estimatedTokens += estimateTokens(message);
+		if (message.role !== "system") tokens += estimateTokens(message);
 	}
-	return estimatedTokens;
+	return tokens;
 }
 
 function formatShortTokenCount(count) {
