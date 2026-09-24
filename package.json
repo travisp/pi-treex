@@ -1,6 +1,6 @@
 {
 	"name": "pi-treex",
-	"version": "0.4.4",
+	"version": "0.5.0",
 	"description": "Enhances pi's native /tree with sticky-left view and a detail pane",
 	"type": "module",
 	"main": "./treex.ts",

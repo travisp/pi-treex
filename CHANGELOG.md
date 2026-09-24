@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-24
+
 ### Added
 
 - Added context-edit details showing omission targets and replacement content, including full replacement text in the expanded drawer.
