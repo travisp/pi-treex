@@ -1,4 +1,5 @@
 node_modules/
+/VENT.md
 .devbox/
 .pi-lens/
 .DS_Store
