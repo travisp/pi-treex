@@ -1,5 +1,10 @@
 {
-	"packages": ["nodejs@24"],
+	"packages": {
+		"nodejs-slim": {
+			"version": "24",
+			"outputs": ["out", "npm"]
+		}
+	},
 	"shell": {
 		"scripts": {
 			"check": "npm run check"
