@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- Added a full-screen compact tree view below 40 terminal rows, adapting automatically as the phone keyboard opens or closes.
+- Added a single compact header with the active filter, its configured cycling shortcut, and a search hint. The search query appears on a separate line only while searching.
+
+### Changed
+
+- Compact mode hides shortcut help, spacer rows, detail metadata, and outer top/bottom borders while keeping the three-line message preview and internal separators.
+- Compact tree rows use `u:` and `a:` role labels and omit active-path dots, retaining branch connectors and the selection/current-point marker gutter.
+- Shortened detail shortcuts to `^r full` and `Esc/^r collapse`.
+
+### Development
+
+- Simplified compact rendering while reusing native tree navigation and label editing.
+- Added regression coverage for resizing, search, configured and unbound cycling shortcuts, role labels, path markers, label editing, and overlay cleanup.
+
 ## 0.5.0 - 2026-09-24
 
 ### Added

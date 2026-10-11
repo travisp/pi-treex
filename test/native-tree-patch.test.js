@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InteractiveMode, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
+import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 
 import {
 	AssistantMessageComponent,
@@ -16,6 +18,7 @@ import { installTreeXNativePatches } from "../src/treex-component.ts";
 import treexExtension from "../treex.ts";
 
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+setKeybindings(new KeybindingsManager());
 
 function createTheme() {
 	return {
@@ -44,6 +47,14 @@ function createInteractiveModeClass() {
 					this.focus = focus;
 				},
 				requestRender: () => {},
+				showOverlay: (component, options) => {
+					this.overlay = { component, options, hidden: false };
+					return {
+						hide: () => {
+							this.overlay.hidden = true;
+						},
+					};
+				},
 			};
 			this.editor = { name: "editor" };
 			this.editorContainer = {
@@ -79,12 +90,15 @@ function createInteractiveModeClass() {
 
 		showSelector(create) {
 			const done = () => {
+				created.dispose?.();
 				this.editorContainer.clear();
 				this.editorContainer.addChild(this.editor);
 				this.ui.setFocus(this.editor);
 			};
 
-			const { component, focus } = create(done);
+			this.done = done;
+			const created = create(done);
+			const { component, focus } = created;
 			this.editorContainer.clear();
 			this.editorContainer.addChild(component);
 			this.ui.setFocus(focus);
@@ -166,6 +180,15 @@ function createTree() {
 	const sibling = makeNode("sibling", "root", "sibling branch");
 	const root = makeNode("root", null, "root", [branch, sibling]);
 	return [root];
+}
+
+function createDeepTree() {
+	let node = makeNode("deep-39", "deep-38", "deep message 39");
+	for (let index = 38; index >= 0; index--) {
+		node = makeNode(`deep-${index}`, index === 0 ? null : `deep-${index - 1}`, `deep message ${index}`, [node]);
+	}
+	node.children.push(makeNode("deep-sibling", "deep-0", "sibling branch"));
+	return [node];
 }
 
 function createToolResultTree() {
@@ -266,13 +289,14 @@ function renderWrappedTree({
 	theme = createTheme(),
 	modelRuntime = { getModel: () => undefined },
 	outputPad = 1,
+	rows = 40,
 } = {}) {
 	globalThis[THEME_KEY] = theme;
 
 	const InteractiveMode = createInteractiveModeClass();
 	installTreeXNativePatches(InteractiveMode, nativeComponents);
 
-	const mode = new InteractiveMode(24);
+	const mode = new InteractiveMode(rows);
 	mode.outputPad = outputPad;
 	const entries = collectEntries(tree);
 	mode.sessionManager.getEntries = () => entries;
@@ -285,9 +309,9 @@ function renderWrappedTree({
 	const selector = new TreeSelectorComponent(
 		tree,
 		leafId,
-		24,
+		rows,
 		() => {},
-		() => {},
+		() => mode.done(),
 		() => {},
 		initialSelectedId,
 		filterMode,
@@ -337,41 +361,191 @@ test("native tree patch wraps the real tree selector and renders without crashin
 
 	assert.notEqual(wrapper, selector);
 	assert.equal(mode.focus, wrapper);
-	assert.ok(findLine(lines, "depth 3"));
 	assert.ok(lines.some((line) => line.includes("selected branch message")));
 	assert.ok(lines.some((line) => line.includes("CURRENT")));
 	assert.match(detailHeader ?? "", /\d+\/\d+ · DEPTH \d+ · CURRENT\s+│\s+USER/);
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
 });
 
+test("short terminals hide help and fill the available height across resizes", () => {
+	const { mode, selector } = renderWrappedTree({ rows: 20, filterMode: "no-tools" });
+	const children = [...selector.children];
+	const help = children.find((child) => child.constructor.name === "TreeHelp");
+	const helpLines = help.render(40);
+	const compactLines = mode.child.render(40);
+
+	assert.equal(compactLines.length, 20);
+	assert.ok(compactLines[0].includes("[no-tools] ^o · Type to search"));
+	assert.equal(selector.getTreeList().maxVisibleLines, 14);
+	assert.ok(compactLines[compactLines.length - 4].includes("─"));
+	assert.ok(!compactLines.at(-1).includes("─"));
+	const searchIndex = compactLines.findIndex((line) => line.includes("Type to search"));
+	assert.ok(compactLines[searchIndex + 1].includes("─"));
+	assert.ok(compactLines[searchIndex + 2].trim().length > 0);
+	assert.equal(mode.overlay.component, mode.child);
+	assert.equal(mode.overlay.options.width, "100%");
+	assert.equal(mode.overlay.options.maxHeight, "100%");
+	assert.equal(mode.overlay.options.anchor, "top-left");
+	assert.equal(mode.overlay.options.margin, 0);
+	assert.equal(mode.overlay.options.nonCapturing, true);
+	assert.equal(mode.overlay.options.visible(40, 20), true);
+	assert.equal(mode.overlay.options.visible(40, 35), true);
+	assert.equal(mode.overlay.options.visible(40, 40), false);
+	assert.ok(compactLines.some((line) => line.includes("[no-tools] ^o · Type to search")));
+	assert.ok(!compactLines.some((line) => line.includes("Session Tree")));
+	assert.ok(compactLines.some((line) => line.includes("selected branch message")));
+	assert.ok(!compactLines.some((line) => line.includes("DEPTH")));
+	for (const line of helpLines) assert.ok(!compactLines.includes(line));
+	assert.deepEqual(selector.children, children);
+
+	mode.ui.terminal.rows = 35;
+	const keyboardHiddenLines = mode.child.render(40);
+	assert.equal(keyboardHiddenLines.length, 35);
+	for (const line of helpLines) assert.ok(!keyboardHiddenLines.includes(line));
+
+	mode.ui.terminal.rows = 40;
+	const tallLines = mode.child.render(40);
+	for (const line of helpLines) assert.ok(tallLines.includes(line));
+	assert.ok(tallLines.some((line) => line.includes("DEPTH")));
+
+	mode.ui.terminal.rows = 39;
+	assert.equal(mode.child.render(40).length, 39);
+	mode.child.handleInput("\x12");
+	const expandedLines = mode.child.render(40);
+	assert.equal(expandedLines.length, 39);
+	for (const line of helpLines) assert.ok(!expandedLines.includes(line));
+	mode.child.handleInput("\x1b");
+	mode.child.handleInput("\x1b");
+	assert.equal(mode.overlay.hidden, true);
+	assert.equal(mode.child, mode.editor);
+});
+
+test("compact search adds a query row only while searching", () => {
+	const { mode, selector } = renderWrappedTree({ rows: 20 });
+	const initialLines = mode.child.render(40);
+	const initialTreeRows = selector.getTreeList().maxVisibleLines;
+	assert.equal(initialLines.length, 20);
+	assert.ok(!initialLines.some((line) => line.includes("Search:")));
+
+	for (const character of "selected") mode.child.handleInput(character);
+	const searchLines = mode.child.render(40);
+	assert.equal(searchLines.length, 20);
+	assert.ok(findLine(searchLines, "Search: selected"));
+	assert.ok(findLine(searchLines, "[default] ^o · Type to search"));
+	assert.equal(selector.getTreeList().maxVisibleLines, initialTreeRows - 1);
+
+	mode.child.handleInput("\x1b");
+	const clearedLines = mode.child.render(40);
+	assert.equal(clearedLines.length, 20);
+	assert.ok(!clearedLines.some((line) => line.includes("Search:")));
+	assert.equal(selector.getTreeList().maxVisibleLines, initialTreeRows);
+});
+
+test("compact filter hint follows configured cycling keys", () => {
+	const previous = getKeybindings();
+	try {
+		setKeybindings(new KeybindingsManager({ "app.tree.filter.cycleForward": "alt+shift+o" }));
+		const { mode } = renderWrappedTree({ rows: 35 });
+		assert.ok(findLine(mode.child.render(60), "[default] ⌥⇧o · Type to search"));
+	} finally {
+		setKeybindings(previous);
+	}
+});
+
+test("compact layout reuses native label editing", () => {
+	const { mode, selector } = renderWrappedTree({ rows: 20 });
+	selector.showLabelInput("branch-5", "existing label");
+	const nativeLabelLines = selector.labelInput.render(40);
+	const labelLines = mode.child.render(40);
+	for (const line of nativeLabelLines) assert.ok(labelLines.includes(line));
+	selector.hideLabelInput();
+	assert.equal(mode.child.render(40).length, 20);
+});
+
+test("compact layout omits the cycling hint when the action is unbound", () => {
+	const previous = getKeybindings();
+	try {
+		setKeybindings(new KeybindingsManager({ "app.tree.filter.cycleForward": [] }));
+		const { mode } = renderWrappedTree({ rows: 20 });
+		assert.ok(findLine(mode.child.render(40), "[default] · Type to search"));
+	} finally {
+		setKeybindings(previous);
+	}
+});
+
 test("sticky-left removes the final indentation level on narrow terminals", () => {
-	const { mode, lines: wideLines } = renderWrappedTree();
+	const { mode, lines: wideLines } = renderWrappedTree({ rows: 14 });
 	const narrowLines = mode.child.render(40);
 	const narrowCurrentLine = findLine(narrowLines, "selected branch message");
 	const wideCurrentLine = findLine(wideLines, "selected branch message");
 
 	assert.ok(narrowCurrentLine);
 	assert.ok(wideCurrentLine);
-	assert.equal(narrowCurrentLine.indexOf("• user:"), 2);
-	assert.equal(wideCurrentLine.indexOf("• user:"), 5);
+	assert.equal(narrowCurrentLine.indexOf("u:"), 2);
+	assert.equal(wideCurrentLine.indexOf("u:"), 5);
+});
+
+test("compact tree omits path dots while preserving current and selection gutters", () => {
+	const assistant = makeMessageNode("assistant", "user", {
+		role: "assistant",
+		content: [{ type: "text", text: "reply with • in the content" }],
+	});
+	const user = makeNode("user", null, "question", [assistant]);
+	const { mode, selector } = renderWrappedTree({ tree: [user], leafId: "assistant", rows: 20 });
+	const treeList = selector.getTreeList();
+	const activePathIds = treeList.activePathIds;
+	const compactLines = mode.child.render(40);
+	assert.equal(findLine(compactLines, "u: question"), "  u: question");
+	assert.ok(findLine(compactLines, "a: reply")?.startsWith("◆ a:"));
+	assert.ok(findLine(compactLines, "reply with • in the content"));
+	assert.equal(treeList.activePathIds, activePathIds);
+	assert.ok(activePathIds.has("assistant"));
+
+	treeList.selectedIndex = treeList.filteredNodes.findIndex((node) => node.node.entry.id === "user");
+	assert.ok(findLine(mode.child.render(40), "u: question")?.startsWith("› u:"));
+	mode.ui.terminal.rows = 40;
+	const tallLines = mode.child.render(40);
+	assert.ok(findLine(tallLines, "user: question")?.includes("• user:"));
+	assert.ok(findLine(tallLines, "assistant: reply")?.includes("• assistant:"));
+});
+
+test("compact tree abbreviates role labels without changing message content", () => {
+	const assistant = makeMessageNode("assistant", "user", {
+		role: "assistant",
+		content: [{ type: "text", text: "assistant: reply" }],
+	});
+	const user = makeNode("user", null, "user: question", [assistant]);
+	const { mode, selector } = renderWrappedTree({ tree: [user], leafId: "assistant", rows: 35 });
+	const compactLines = mode.child.render(60);
+	assert.ok(findLine(compactLines, "u: user: question"));
+	assert.ok(findLine(compactLines, "a: assistant: reply"));
+
+	const treeList = selector.getTreeList();
+	assert.equal(treeList.getEntryDisplayText(user, false), "u: user: question");
+	assert.equal(treeList.getEntryDisplayText(assistant, false), "a: assistant: reply");
+
+	mode.ui.terminal.rows = 40;
+	const tallLines = mode.child.render(60);
+	assert.ok(findLine(tallLines, "user: user: question"));
+	assert.ok(findLine(tallLines, "assistant: assistant: reply"));
 });
 
 test("selector chrome is measured before placing the sticky-left status", () => {
-	const { mode, selector } = renderWrappedTree();
+	const { mode, selector } = renderWrappedTree({ tree: createDeepTree(), leafId: "deep-20" });
 	const wrappedHelpLines = simulateWrappedTreeHelp(selector);
 	const lines = mode.child.render(80);
-	const stickyStatusIndex = lines.findIndex((line) => line.includes("depth 3"));
-	const firstTreeRowIndex = lines.findIndex((line) => line.includes("branch message 2"));
+	const stickyStatusIndex = lines.findIndex((line) => line.includes("⇤"));
 
 	for (const helpLine of wrappedHelpLines) {
 		assert.ok(lines.includes(helpLine));
 	}
-	assert.equal(stickyStatusIndex + 1, firstTreeRowIndex);
+	assert.ok(stickyStatusIndex >= 0);
+	assert.ok(lines[stickyStatusIndex + 1].includes("deep message"));
 	assert.ok(lines.some((line) => line.includes("Type to search:")));
 });
 
 test("expanded detail layout accounts for wrapped selector chrome", () => {
-	const { mode, selector } = renderWrappedTree();
+	const { mode, selector } = renderWrappedTree({ tree: createDeepTree(), leafId: "deep-20" });
 	simulateWrappedTreeHelp(selector);
 	mode.child.handleInput("\x12");
 	const lines = mode.child.render(80);
@@ -632,7 +806,7 @@ test("context replacement drawer shows full structured content", () => {
 		replacement: { content: [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }] },
 	});
 	const { mode, lines } = renderContextTree(tree, edit.entry.id);
-	assert.ok(findLine(lines, "Ctrl+R full"));
+	assert.ok(findLine(lines, "^r full"));
 	mode.child.handleInput("\x12");
 	const expanded = mode.child.render(80);
 	assert.ok(findLine(expanded, "FULL CONTEXT EDIT"));
@@ -723,8 +897,8 @@ test("detail pane shows an inline review hint when content is truncated", () => 
 		filterMode: "all",
 	});
 
-	assert.ok(truncatedLines.some((line) => line.includes("Ctrl+R full")));
-	assert.ok(!shortLines.some((line) => line.includes("Ctrl+R full")));
+	assert.ok(truncatedLines.some((line) => line.includes("^r full")));
+	assert.ok(!shortLines.some((line) => line.includes("^r full")));
 });
 
 test("ctrl+r toggles a full detail drawer", () => {
@@ -752,7 +926,7 @@ test("ctrl+r toggles a full detail drawer", () => {
 	assert.ok(expandedLines.some((line) => line.includes("two")));
 	assert.ok(expandedLines.some((line) => line.includes("three")));
 	assert.ok(expandedLines.some((line) => line.includes("four")));
-	assert.ok(expandedLines.some((line) => line.includes("Esc/Ctrl+R collapse")));
+	assert.ok(expandedLines.some((line) => line.includes("Esc/^r collapse")));
 
 	mode.child.handleInput("\x1b");
 	assert.equal(mode.child.expandedDetail.expanded, false);

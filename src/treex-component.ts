@@ -1,19 +1,27 @@
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { buildSessionProjection, calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	Key,
+	getKeybindings,
+	matchesKey,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 const DETAIL_BODY_LINES = 3;
+const COMPACT_TERMINAL_HEIGHT = 40;
 const NARROW_TERMINAL_MAX_WIDTH = 50;
-const COMPACT_DETAIL_LINES = DETAIL_BODY_LINES + 2;
+const DESKTOP_DETAIL_ROWS = DETAIL_BODY_LINES + 2;
 const EXPANDED_DETAIL_CHROME_LINES = 4;
 const EXPANDED_DETAIL_MIN_LINES = EXPANDED_DETAIL_CHROME_LINES + DETAIL_BODY_LINES;
 const EXPANDED_DETAIL_PREFERRED_TREE_ROWS = 12;
-const EXPANDED_DETAIL_COLLAPSE_HINT = "Esc/Ctrl+R collapse";
+const EXPANDED_DETAIL_COLLAPSE_HINT = "Esc/^r collapse";
 const CURRENT_ROW_MARKER = "◆";
 const METADATA_SEPARATOR = " · ";
 const METADATA_GROUP_SEPARATOR = "  │  ";
 const REVIEW_DETAIL_KEY = Key.ctrl("r");
-const TRUNCATED_DETAIL_HINT = "… Ctrl+R full";
+const TRUNCATED_DETAIL_HINT = "… ^r full";
 const FILTER_LABELS = {
 	"no-tools": "[no-tools]",
 	"user-only": "[user]",
@@ -24,6 +32,10 @@ const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const SHOW_SELECTOR_PATCH = Symbol.for("pi-treex:show-selector-patch");
 const ESCAPE_CODE = 27;
 const BELL_CODE = 7;
+
+function isCompactTerminal(rows) {
+	return rows < COMPACT_TERMINAL_HEIGHT;
+}
 
 function getTheme() {
 	return globalThis[THEME_KEY];
@@ -246,16 +258,35 @@ function renderWithStickyLeft(treeList, width, originalRender) {
 	}
 }
 
-function patchTreeListRender(treeList) {
+function patchTreeListRender(treeList, terminal) {
 	if (treeList.__treexStickyLeftPatched) return;
 
 	const originalRender = treeList.render.bind(treeList);
+	const originalDisplayText = treeList.getEntryDisplayText.bind(treeList);
 	treeList.__treexStickyLeftPatched = true;
 
+	// Shorten role labels before native clipping so message text gains the columns.
+	treeList.getEntryDisplayText = function getCompactEntryDisplayText(node, isSelected) {
+		const text = originalDisplayText(node, isSelected);
+		if (!isCompactTerminal(terminal.rows) || node.entry.type !== "message") return text;
+		const role = node.entry.message.role;
+		if (role !== "user" && role !== "assistant") return text;
+		const theme = getTheme();
+		const color = role === "user" ? "accent" : "success";
+		return text.replace(theme.fg(color, `${role}: `), theme.fg(color, `${role === "user" ? "u" : "a"}: `));
+	};
+
 	treeList.render = function renderStickyLeft(width) {
-		const lines = renderWithStickyLeft(this, width, originalRender);
-		lines.pop();
-		return markCurrentLine(this, lines);
+		const activePathIds = this.activePathIds;
+		// Keep the cursor/current-point gutter, but reclaim the path-dot columns.
+		if (isCompactTerminal(terminal.rows)) this.activePathIds = new Set();
+		try {
+			const lines = renderWithStickyLeft(this, width, originalRender);
+			lines.pop();
+			return markCurrentLine(this, lines);
+		} finally {
+			this.activePathIds = activePathIds;
+		}
 	};
 }
 
@@ -427,8 +458,12 @@ function calculateTreeDetailLayout(terminalRows, detailExpanded, selectorChromeL
 		return { treeRows, detailBodyRows };
 	}
 
-	const preferredTreeRows = Math.max(5, Math.floor(terminalRows / 2) - COMPACT_DETAIL_LINES);
-	const availableTreeRows = Math.max(1, terminalRows - selectorChromeLines - COMPACT_DETAIL_LINES);
+	const compact = isCompactTerminal(terminalRows);
+	const detailRows = compact ? DETAIL_BODY_LINES : DESKTOP_DETAIL_ROWS;
+	const availableTreeRows = Math.max(1, terminalRows - selectorChromeLines - detailRows);
+	const preferredTreeRows = compact
+		? availableTreeRows
+		: Math.max(5, Math.floor(terminalRows / 2) - DESKTOP_DETAIL_ROWS);
 	return {
 		treeRows: Math.min(preferredTreeRows, availableTreeRows),
 		detailBodyRows: DETAIL_BODY_LINES,
@@ -566,6 +601,14 @@ function getCurrentPositionPart(treeList, selected, theme) {
 	if (!currentDirection) return null;
 
 	return theme.bold(theme.fg("accent", currentDirection === "up" ? "↑ CURRENT" : "↓ CURRENT"));
+}
+
+function formatCompactKey(key) {
+	return key
+		.replace(/ctrl\+/g, "^")
+		.replace(/alt\+/g, "⌥")
+		.replace(/shift\+/g, "⇧")
+		.toLowerCase();
 }
 
 function getTreeFilterParts(treeList, theme) {
@@ -913,12 +956,41 @@ class TreeXWrapper {
 		this.tui = mode.ui;
 		this.detailContent = new DetailContentRenderer(mode, this.treeList, nativeComponents);
 		this.expandedDetail = new ExpandedDetailPane();
-		patchTreeListRender(this.treeList);
+		patchTreeListRender(this.treeList, this.tui.terminal);
 	}
 
 	renderSelector(width) {
-		const lines = removeNativeTreeTrailingSpacer(this.selector.render(width));
-		const treeLineCount = this.selector.labelInput ? 0 : getRenderedTreeLineCount(this.treeList);
+		if (isCompactTerminal(this.tui.terminal.rows)) return this.renderCompactSelector(width);
+		return {
+			lines: removeNativeTreeTrailingSpacer(this.selector.render(width)),
+			treeLineCount: this.selector.labelInput ? 0 : getRenderedTreeLineCount(this.treeList),
+		};
+	}
+
+	renderCompactSelector(width) {
+		const theme = getTheme();
+		const query = this.treeList.getSearchQuery();
+		const filter = this.treeList.filterMode === "default" ? "[default]" : FILTER_LABELS[this.treeList.filterMode];
+		const cycleKey = getKeybindings().getKeys("app.tree.filter.cycleForward")[0];
+		// An unbound action has no shortcut to advertise.
+		const cycleHint = cycleKey ? ` ${formatCompactKey(cycleKey)}` : "";
+		const border = fitLine(theme.fg("border", "─".repeat(width)), width);
+		const lines = [fitLine(`${theme.bold(`  ${filter}${cycleHint}`)} · ${theme.fg("muted", "Type to search")}`, width)];
+		if (query) lines.push(fitLine(`  ${theme.fg("muted", "Search:")} ${theme.fg("accent", query)}`, width));
+		lines.push(border);
+
+		// Reuse native tree rows and label editing, without rendering Pi's header/help.
+		let treeLineCount = 0;
+		if (this.selector.labelInput) {
+			lines.push(...this.selector.labelInput.render(width));
+		} else {
+			const treeLines = this.treeList.render(width);
+			// Pad short histories so the preview stays at the bottom of the screen.
+			while (treeLines.length < this.treeList.maxVisibleLines) treeLines.push("");
+			lines.push(...treeLines);
+			treeLineCount = treeLines.length;
+		}
+		lines.push(border);
 		return { lines, treeLineCount };
 	}
 
@@ -1003,24 +1075,18 @@ class TreeXWrapper {
 	}
 
 	renderDetailPane(theme, width) {
+		const compact = isCompactTerminal(this.tui.terminal.rows);
 		const selected = this.getSelectedNode();
-		if (!selected) {
-			return [
-				fitLine(theme.fg("muted", "NO SELECTION"), width),
-				...Array.from({ length: DETAIL_BODY_LINES }, () => fitLine("", width)),
-				fitLine(theme.fg("border", "─".repeat(width)), width),
-			];
+		let bodyLines = Array(DETAIL_BODY_LINES).fill("");
+		let metadata = theme.fg("muted", "NO SELECTION");
+		if (selected) {
+			const info = describeEntry(this.treeList, selected.node);
+			bodyLines = getDetailBodyLines(this.detailContent.renderPreview(selected.node.entry, info, width), width, theme);
+			if (!compact) metadata = this.getDetailMetadata(theme, selected, info);
 		}
-
-		const entry = selected.node.entry;
-		const info = describeEntry(this.treeList, selected.node);
-		const bodyLines = getDetailBodyLines(this.detailContent.renderPreview(entry, info, width), width, theme);
-
-		return [
-			fitLine(this.getDetailMetadata(theme, selected, info), width),
-			...bodyLines.map((line) => fitLine(line, width)),
-			fitLine(theme.fg("border", "─".repeat(width)), width),
-		];
+		const lines = bodyLines.map((line) => fitLine(line, width));
+		if (compact) return lines;
+		return [fitLine(metadata, width), ...lines, fitLine(theme.fg("border", "─".repeat(width)), width)];
 	}
 
 	renderExpandedDetailPane(theme, width) {
@@ -1045,13 +1111,13 @@ class TreeXWrapper {
 		const renderWidth = Math.max(20, width);
 
 		const { lines, treeLineCount } = this.renderSelectorWithLayout(renderWidth);
-		const { stickyLeftDepth } = getStickyLeftState(this.treeList, renderWidth);
-
-		if (stickyLeftDepth && treeLineCount > 0) {
-			// The native bottom border remains after the tree rows. Replace the
-			// spacer immediately before those rows without assuming a chrome height.
-			const firstTreeLineIndex = lines.length - treeLineCount - 1;
-			lines[firstTreeLineIndex - 1] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
+		if (!isCompactTerminal(this.tui.terminal.rows) && treeLineCount > 0) {
+			const { stickyLeftDepth } = getStickyLeftState(this.treeList, renderWidth);
+			if (stickyLeftDepth) {
+				// Native desktop chrome has a spacer before the tree and a border after it.
+				const firstTreeLineIndex = lines.length - treeLineCount - 1;
+				lines[firstTreeLineIndex - 1] = this.renderStickyLeftLine(theme, renderWidth, stickyLeftDepth);
+			}
 		}
 
 		const detailLines = this.expandedDetail.expanded
@@ -1087,7 +1153,24 @@ export function installTreeXNativePatches(InteractiveMode, nativeComponents) {
 			}
 
 			const wrapper = new TreeXWrapper(selector, this, nativeComponents);
-			return { component: wrapper, focus: wrapper };
+			// Selectors normally replace only the editor. Cover the conversation on
+			// short screens while retaining the native selector's input and lifecycle.
+			const overlay = this.ui.showOverlay(wrapper, {
+				width: "100%",
+				maxHeight: "100%",
+				anchor: "top-left",
+				margin: 0,
+				nonCapturing: true,
+				visible: (_width, height) => isCompactTerminal(height),
+			});
+			return {
+				component: wrapper,
+				focus: wrapper,
+				dispose: () => {
+					overlay.hide();
+					result.dispose?.();
+				},
+			};
 		});
 	};
 
