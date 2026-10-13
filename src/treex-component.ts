@@ -1153,9 +1153,14 @@ export function installTreeXNativePatches(InteractiveMode, nativeComponents) {
 			}
 
 			const wrapper = new TreeXWrapper(selector, this, nativeComponents);
-			// Selectors normally replace only the editor. Cover the conversation on
-			// short screens while retaining the native selector's input and lifecycle.
-			const overlay = this.ui.showOverlay(wrapper, {
+			// Keep keyboard focus on the editor-mounted wrapper. A separate render-only
+			// overlay covers short screens without making Pi redirect tree input when
+			// that overlay becomes invisible on taller terminals.
+			const overlayView = {
+				render: (width) => wrapper.render(width),
+				invalidate: () => wrapper.invalidate(),
+			};
+			const overlay = this.ui.showOverlay(overlayView, {
 				width: "100%",
 				maxHeight: "100%",
 				anchor: "top-left",

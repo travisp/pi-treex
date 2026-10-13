@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InteractiveMode, estimateTokens } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
+import { TuiMainScreen, getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 
 import {
@@ -290,6 +290,7 @@ function renderWrappedTree({
 	modelRuntime = { getModel: () => undefined },
 	outputPad = 1,
 	rows = 40,
+	ui,
 } = {}) {
 	globalThis[THEME_KEY] = theme;
 
@@ -297,6 +298,8 @@ function renderWrappedTree({
 	installTreeXNativePatches(InteractiveMode, nativeComponents);
 
 	const mode = new InteractiveMode(rows);
+	if (ui) mode.ui = ui;
+	mode.ui.setFocus(mode.editor);
 	mode.outputPad = outputPad;
 	const entries = collectEntries(tree);
 	mode.sessionManager.getEntries = () => entries;
@@ -367,6 +370,36 @@ test("native tree patch wraps the real tree selector and renders without crashin
 	assert.ok(findLine(lines, "selected branch message")?.startsWith("◆ "));
 });
 
+for (const initialRows of [20, 40]) {
+	test(`real TUI keeps tree input focused across resizes starting at ${initialRows} rows`, () => {
+		const ui = new TuiMainScreen({ rows: initialRows, columns: 80, hideCursor: () => {} });
+		// Exercise native input routing without starting terminal IO or render timers.
+		ui.requestRender = () => {};
+		ui.requestImmediateRender = () => {};
+		const { mode, selector } = renderWrappedTree({ rows: initialRows, ui });
+		const wrapper = mode.child;
+
+		for (const rows of [initialRows, 20, 40, 39, 50]) {
+			ui.terminal.rows = rows;
+			wrapper.render(80);
+			ui.handleTerminalInput("x");
+			assert.equal(ui.getFocusedComponent(), wrapper);
+			assert.equal(selector.getTreeList().getSearchQuery(), "x");
+			ui.handleTerminalInput("\x1b");
+			assert.equal(selector.getTreeList().getSearchQuery(), "");
+			ui.handleTerminalInput("\x12");
+			assert.equal(wrapper.expandedDetail.expanded, true);
+			ui.handleTerminalInput("\x1b");
+			assert.equal(wrapper.expandedDetail.expanded, false);
+		}
+
+		ui.handleTerminalInput("\x1b");
+		assert.equal(mode.child, mode.editor);
+		assert.equal(ui.getFocusedComponent(), mode.editor);
+		assert.equal(ui.hasOverlay(), false);
+	});
+}
+
 test("short terminals hide help and fill the available height across resizes", () => {
 	const { mode, selector } = renderWrappedTree({ rows: 20, filterMode: "no-tools" });
 	const children = [...selector.children];
@@ -382,7 +415,8 @@ test("short terminals hide help and fill the available height across resizes", (
 	const searchIndex = compactLines.findIndex((line) => line.includes("Type to search"));
 	assert.ok(compactLines[searchIndex + 1].includes("─"));
 	assert.ok(compactLines[searchIndex + 2].trim().length > 0);
-	assert.equal(mode.overlay.component, mode.child);
+	assert.notEqual(mode.overlay.component, mode.child);
+	assert.deepEqual(mode.overlay.component.render(40), compactLines);
 	assert.equal(mode.overlay.options.width, "100%");
 	assert.equal(mode.overlay.options.maxHeight, "100%");
 	assert.equal(mode.overlay.options.anchor, "top-left");

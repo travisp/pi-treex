@@ -13,8 +13,13 @@
 - Compact tree rows use `u:` and `a:` role labels and omit active-path dots, retaining branch connectors and the selection/current-point marker gutter.
 - Shortened detail shortcuts to `^r full` and `Esc/^r collapse`.
 
+### Fixed
+
+- Kept tree keyboard input working on taller terminals and across compact/desktop resizes by separating the visual overlay from the focused selector.
+
 ### Development
 
+- Added real-TUI keyboard focus regression tests, verified against Pi 0.87.1 and 1.2.0.
 - Simplified compact rendering while reusing native tree navigation and label editing.
 - Added regression coverage for resizing, search, configured and unbound cycling shortcuts, role labels, path markers, label editing, and overlay cleanup.
 
