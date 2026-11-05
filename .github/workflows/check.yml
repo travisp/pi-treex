@@ -1,0 +1,48 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: ["1.5.0", latest]
+    env:
+      PI_VERSION: ${{ matrix.pi }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jetify-com/devbox-install-action@v0.12.0
+        with:
+          enable-cache: true
+      - run: devbox run -- npm ci --ignore-scripts
+      - name: Install selected Pi host
+        run: |
+          devbox run -- npm install --no-save --package-lock=false --ignore-scripts \
+            "@earendil-works/pi-coding-agent@$PI_VERSION" \
+            "@earendil-works/pi-agent-core@$PI_VERSION" \
+            "@earendil-works/pi-ai@$PI_VERSION" \
+            "@earendil-works/pi-tui@$PI_VERSION"
+      - name: Verify selected host versions
+        run: |
+          devbox run -- node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const version = JSON.parse(readFileSync('node_modules/@earendil-works/pi-coding-agent/package.json', 'utf8')).version;
+          if (process.env.PI_VERSION !== 'latest') assert.equal(version, process.env.PI_VERSION);
+          for (const name of ['pi-coding-agent', 'pi-agent-core', 'pi-ai', 'pi-tui']) {
+            const actual = JSON.parse(readFileSync(`node_modules/@earendil-works/${name}/package.json`, 'utf8')).version;
+            assert.equal(actual, version, `${name} must match the selected host`);
+            console.log(`${name}: ${actual}`);
+          }
+          NODE
+      - run: devbox run -- npm run check
